@@ -1168,24 +1168,47 @@ Pass 2 (future): For each flagged mistake, analyze opponent's next 5 moves
   → Populates: opponent_capitalized, capitalization_move, capitalization_cpl_swing
 
 ### Book Move Detection
-Uses Lichess Opening Explorer API (free, no auth required):
-```
-GET https://explorer.lichess.ovh/lichess
-?fen={fen}&moves=10&speeds=blitz,rapid&ratings=1400,1600,1800
-```
-Returns moves played from this position with frequencies.
-If played move is in the returned list → is_book_move = TRUE.
-Book moves skip Stockfish analysis entirely → significant speed saving.
+**IMPLEMENTED: Local Polyglot opening book (gm2001.bin)**
+File: `books/gm2001.bin` (475KB, GM games 2001–2013, ELO 2530+)
+Source: https://github.com/michaeldv/donna_opening_books
 
-**Issue:** Each API call has network latency.
-With 100+ moves per game × 10,921 games = ~1M API calls.
-**Planned fix:** Download Polyglot opening book (.bin) for local lookup.
-python-chess reads Polyglot files natively with 3 lines of code:
 ```python
 import chess.polyglot
-with chess.polyglot.open_reader("book.bin") as reader:
-    entry = reader.get(board)  # None if not in book
+book = chess.polyglot.open_reader(os.getenv('POLYGLOT_BOOK_PATH'))
+entries = list(book.find_all(board))  # instant binary search
+is_book = any(e.move == move for e in entries)
 ```
+
+Book moves skip Stockfish entirely → significant speed saving (~20% of moves).
+Zero network latency vs previous Lichess Explorer API (~200–500ms per call).
+Book opened once per game, closed in cleanup. Safe for parallel workers.
+
+The books/ directory is gitignored — must be downloaded separately.
+Download source documented in Section 13.
+
+### Syzygy Endgame Tablebases
+**IMPLEMENTED: 3-4-5 piece Syzygy tablebases**
+Location: `syzygy/` directory (938MB, 290 files — .rtbw + .rtbz pairs)
+Source: http://tablebase.sesse.net/syzygy/3-4-5/
+
+When piece count on board drops to 5 or fewer, tablebase lookup fires instead
+of relying solely on Stockfish WDL. Stores per move:
+- `tablebase_result`: 'win', 'draw', or 'loss' from side-to-move's perspective
+- `tablebase_dtz`: Distance To Zero (plies to forced result). NULL for drawn
+  positions where DTZ is undefined — this is correct, not a bug.
+- `tablebase_deviation`: How many DTZ moves slower than optimal the player played.
+  NULL for draws; populated for win/loss positions.
+
+```python
+# Board snapshot taken before push (only when pieces <= 5):
+board_snap = board.copy() if pieces_now <= 5 else None
+board.push(move)
+if board_snap:
+    tb_result, tb_dtz, tb_deviation = get_tablebase_info(board_snap, board, syzygy_tb)
+```
+
+The syzygy/ directory is gitignored — must be downloaded separately.
+Download with the PowerShell script in Section 26.
 
 ### Analysis Queue Management
 The `run_analysis_queue()` function:
@@ -1578,12 +1601,25 @@ This enables:
 3. Identifying if opponent-blunder exploitation correlates with your clock state
 
 ### Increment Handling
+**IMPLEMENTED: Increment-aware time pressure classification**
 Time control "10+5" means 10 minutes + 5 seconds per move.
 The +5 seconds per move significantly changes time management.
 In a 40-move game with 5-second increment, you earn back 200 seconds.
-effective_time_remaining ≈ clock_ms + (increment_ms × estimated_moves_remaining)
-This should factor into time pressure thresholds for increment games.
-Currently tracked (increment_ms column) but not yet applied to thresholds.
+
+```python
+def classify_time_pressure(clock_ms, total_time_ms, increment_ms,
+                           total_moves, move_number, thresholds):
+    if increment_ms and total_moves and move_number:
+        moves_remaining = max(1, (total_moves - move_number) / 2)
+        effective_clock = clock_ms + increment_ms * moves_remaining
+    else:
+        effective_clock = clock_ms
+    pct = effective_clock / total_time_ms
+    ...
+```
+
+Raw clock_ms stored as-is in the database. Only the classification uses
+effective_clock. Falls back to raw clock when no increment or total_moves unknown.
 
 ---
 
@@ -1617,11 +1653,30 @@ def seed_openings_from_lichess_tsv(tsv_path: str):
     conn.commit()
 ```
 
-### Planned: Polyglot Opening Book
-Download: https://sourceforge.net/projects/codekiddy-chess/files/Books/
-Replace Lichess Explorer API calls with local Polyglot lookup.
-python-chess reads Polyglot natively. Zero latency vs HTTP call latency.
-Significant speed improvement for analysis (20-30% of moves are book moves).
+### Polyglot Opening Book — IMPLEMENTED
+`books/gm2001.bin` (475KB) — GM games 2001–2013, ELO 2530+
+Source: https://github.com/michaeldv/donna_opening_books
+Replaces Lichess Explorer API. Zero latency. Safe for parallel workers.
+Covers typical opening theory to move 12–15 for mainstream lines.
+gitignored — download separately (see Section 26).
+
+### Phase 2 Improvement: Cerebellum Opening Book
+The Cerebellum book is used by Stockfish online and covers theory to move
+30+ — significantly deeper than gm2001.bin. For players like StickDoggin
+who know theory deeply (long novelty_move = 15+), gm2001.bin will mark
+moves as novelties that are still well within theory.
+
+**Why it matters for novelty_move accuracy:**
+If a player knows a line to move 22 but gm2001.bin only covers to move 12,
+novelty_move will be set to 12 and moves 12–22 will get full Stockfish
+analysis (wasted compute) and incorrect moves_since_novelty counts.
+
+**Source:** https://github.com/official-stockfish/books (look for cerebellum.bin
+or Cerebellum_Light.bin). The full Cerebellum project is at cerebellum.info.
+May require separate download — file is several MB.
+
+**Action:** Replace or supplement gm2001.bin with Cerebellum in Phase 2.
+Update POLYGLOT_BOOK_PATH in .env once downloaded.
 
 ### Opening Clustering (Planned)
 Group similar opening variations for targeted drilling.
@@ -2084,13 +2139,14 @@ Already architected for it. Each worker:
 - Writes results atomically
 
 ```python
-# Enable parallel mode:
-run_analysis_queue(batch_size=100, parallel=True)
+# Enable parallel mode (run in a dedicated PowerShell window):
+run_analysis_queue(batch_size=11000, parallel=True)
 # Uses ProcessPoolExecutor with cpu_count()-1 workers
 ```
 
-**Expected speedup:** 8 workers × 0.9 = ~7 games/minute.
-10,921 games ÷ 7 = ~26 hours parallel.
+**This machine: 12 logical cores → 11 workers**
+Expected speed: 11 workers × ~0.9 games/min = ~9.9 games/min
+~10,850 remaining games ÷ 9.9 = ~18 hours for full run.
 
 ### Batch Database Writes
 All moves for a game are written in a single batch at the end.
@@ -2099,8 +2155,7 @@ Not move-by-move commits. This is ~10x faster for the database layer.
 ### Book Move Skipping
 20-30% of moves are book moves (opening theory).
 These skip Stockfish analysis entirely.
-Currently using Lichess Explorer API (latency overhead).
-Planned: Polyglot book file for zero-latency local lookup.
+IMPLEMENTED: Local Polyglot book (gm2001.bin) — zero latency, no API calls.
 
 ### Incremental Analysis
 Analyzed games are never touched again (analyzed = TRUE).
@@ -2229,6 +2284,10 @@ Do not change the function signature.
 **Purpose:** Main Stockfish analysis engine. Processes games from analysis_queue.
 **Key functions:**
 - `load_thresholds(game_type)` — loads thresholds from database
+- `open_polyglot_book()` — opens gm2001.bin for local book move detection
+- `is_book_move(book, board, move)` — Polyglot lookup, replaces Lichess API
+- `open_syzygy()` — opens Syzygy tablebase reader for <=5-piece positions
+- `get_tablebase_info(board_before, board_after, syzygy_tb)` — DTZ/WDL lookup
 - `extract_wdl_for_player(score, player_color)` — WDL from player's perspective (BEFORE move)
 - `extract_wdl_after_move(score, player_color)` — WDL from player's perspective (AFTER move)
 - `accuracy_wdl(...)` — Stockfish WDL accuracy model (position-aware)
@@ -2236,26 +2295,29 @@ Do not change the function signature.
 - `accuracy_chesscom(...)` — Win probability delta accuracy
 - `compute_mistake_score(cpl, eval_before, phase, thresholds)` — sigmoid continuous score
 - `classify_mistake(score, cpl, thresholds)` — discrete label from CPL (NOT score)
-- `classify_time_pressure(clock_ms, total_time_ms, thresholds)` — 4-level classification
+- `classify_time_pressure(clock_ms, total_time_ms, increment_ms, total_moves, move_number, thresholds)` — increment-aware 4-level classification
 - `detect_sacrifice(board, move, best_move_uci, cpl)` — identifies sacrifices
 - `detect_psychological_patterns(...)` — missed_salvation, complacency detection
 - `analyse_position(engine, board, ...)` — hybrid time+depth analysis with min_depth guarantee
-- `is_book_move(fen, move_uci)` — Lichess Explorer API lookup
 - `analyze_single_game(game_id)` — full analysis of one game
 - `run_analysis_queue(batch_size, parallel)` — processes queue
 
-**Current mode:** Sequential, batch_size=20
-**To run parallel:** Set parallel=True in __main__
+**Current mode:** Sequential, batch_size=20 (in __main__)
+**Full run command (parallel, all games):** See Section 26
 
-**Known bugs being fixed:**
-1. WDL perspective error — fixed in latest version with extract_wdl_for_player/after_move
+**All known bugs fixed:**
+1. WDL perspective error — fixed with extract_wdl_for_player/after_move
 2. CPL not capped before storage — fixed, now min(cpl_raw, CPL_CAP)
-3. Accuracy formula producing low values — partially fixed with position-aware blending
-4. Classification labels wrong (310 CPL = inaccuracy) — fixed, labels now CPL-primary
-5. Short games (< 10 moves) consuming resources — fixed, filtered in queue query
+3. Accuracy formula — fixed with position-aware blending
+4. Classification labels wrong — fixed, labels now CPL-primary
+5. Short games — filtered in queue query
+6. Lichess API latency — replaced with local Polyglot book
+7. Spurious ALTER TABLE per game — removed
 
-**Status:** Multiple iterations, latest version has all known fixes.
-Needs test run to validate accuracy numbers are now realistic.
+**Validated:** 10-game test run confirmed WDL=85–89%, book_moves populate
+on opening plies, tablebase_result populates on <=5-piece endgames, 0 errors.
+
+**Status:** Ready for full parallel run.
 
 ### .env
 ```
@@ -2265,13 +2327,31 @@ DB_NAME=chess_engine
 DB_USER=postgres
 DB_PASSWORD=0088
 STOCKFISH_PATH=C:\Users\karlb\chess-study-engine\stockfish\stockfish-windows-x86-64-avx2.exe
+POLYGLOT_BOOK_PATH=C:\Users\karlb\chess-study-engine\books\gm2001.bin
+SYZYGY_PATH=C:\Users\karlb\chess-study-engine\syzygy
 ```
+gitignored — never commit this file.
 
 ### stockfish/
 ```
 stockfish-windows-x86-64-avx2.exe  (111MB)
 ```
 Stockfish 18.3. AVX2 = modern CPU instruction set (faster than base version).
+gitignored — download from https://stockfishchess.org/download/ (Windows AVX2).
+
+### books/
+```
+gm2001.bin  (475KB)
+```
+Polyglot opening book — GM games 2001–2013, ELO 2530+.
+gitignored — download from https://github.com/michaeldv/donna_opening_books
+
+### syzygy/
+```
+290 files (.rtbw + .rtbz pairs), 938MB total, largest file 30.87MB
+3-piece, 4-piece, and 5-piece Syzygy endgame tablebases
+```
+gitignored — download with the PowerShell script in Section 26.
 
 ---
 
@@ -2283,17 +2363,20 @@ Stockfish 18.3. AVX2 = modern CPU instruction set (faster than base version).
 - [x] 10,921 games imported from Chess.com (StickDoggin)
 - [x] Current ratings fetched (rapid=1656, blitz=1632)
 - [x] Analysis queue populated with priority scores (10,921 games)
-- [x] ~70 games analyzed (first 3 batches of 20 + initial 10)
+- [x] ~85 games analyzed (validation batches)
 - [x] Stockfish 18.3 installed and working
 - [x] Hybrid time/depth analysis system working
-- [x] Three accuracy models implemented (WDL, Lichess, Chess.com)
+- [x] Three accuracy models implemented (WDL=85–89%, Lichess=35–63%, Chess.com=85–89%)
 - [x] Mistake scoring system (sigmoid + CPL-primary labels)
 - [x] Sacrifice detection working
-- [x] Time pressure classification working
+- [x] Increment-aware time pressure classification
 - [x] Psychological pattern detection implemented
 - [x] Drift flag detection implemented
-- [x] Book move detection via Lichess Explorer API
+- [x] Book move detection via local Polyglot book (gm2001.bin, zero latency)
+- [x] Syzygy 3-4-5 piece tablebases integrated (938MB, 290 files)
+- [x] best_move_san stored alongside best_move_uci
 - [x] 58 default thresholds in database
+- [x] Parallel analysis mode available (11 workers on this machine)
 
 ### Known Bugs / Issues
 
@@ -2327,10 +2410,8 @@ Previous bug: player_color case mismatch ('White' vs 'white').
 Fix: player_color = (player_color or '').lower() at start of analysis.
 
 **Issue 6: Lichess Explorer API calls slow down analysis**
-Status: Known, not yet fixed.
-Impact: Each API call adds ~200-500ms network latency.
-With 100 moves/game × 20,000 opening moves = ~10,000 API calls.
-Fix: Download Polyglot opening book for local lookup (zero latency).
+Status: FIXED. Replaced with local Polyglot book (gm2001.bin).
+Zero latency. No network dependency. Safe for parallel workers.
 
 **Issue 7: Very long games (124+ moves) block queue**
 Status: Mitigated with LONG_GAME_FACTOR = 0.6.
@@ -2348,12 +2429,14 @@ next 5 moves to see if they found the punishing continuation.
 Database:       chess_engine on PostgreSQL 18.3
 Player:         StickDoggin (chess.com, id=1)
 Games:          10,921 imported
-Games analyzed: ~70 (first few batches)
-Games pending:  ~10,850 in analysis_queue
+Games analyzed: ~85 (validation batches — all features confirmed working)
+Games pending:  ~10,836 in analysis_queue
 Moves in DB:    ~819,075 (10,921 × avg 75 moves)
-Moves analyzed: ~5,250 (70 games × avg 75 moves)
+Moves analyzed: ~6,375 (85 games × avg 75 moves)
 Concepts:       176
 Thresholds:     58 default rows
+Machine:        12 logical cores → 11 parallel workers
+Est. full run:  ~18 hours parallel (10,836 ÷ 9.9 games/min)
 ```
 
 ---
@@ -2373,12 +2456,14 @@ Thresholds:     58 default rows
 - [x] Schema updates 1 and 2
 
 ### Phase 2: Analysis Completion (CURRENT)
-- [ ] Validate latest analyze_games.py fixes with test run
-- [ ] Run full parallel analysis on all 10,921 games
+- [x] Validate latest analyze_games.py fixes with test run (10 games, 0 errors)
+- [x] Download and integrate Polyglot opening book — gm2001.bin (replaces API)
+- [x] Integrate Syzygy 3-4-5 piece tablebases (938MB, tablebase_result populated)
+- [x] Increment-aware time pressure classification
+- [ ] **NEXT: Run full parallel analysis on all ~10,836 remaining games (~18 hours)**
 - [ ] Seed openings table from Lichess TSV
-- [ ] Download and integrate Polyglot opening book (replace API calls)
+- [ ] Upgrade to Cerebellum opening book for deeper novelty_move detection
 - [ ] Implement opponent capitalization (second pass analysis)
-- [ ] Seed Syzygy tablebases for endgame positions (optional but valuable)
 
 ### Phase 3: Pattern Detection
 - [ ] Mathematical pattern detector (fork, pin, skewer, back-rank, hanging piece)
@@ -2646,6 +2731,8 @@ DB_NAME=chess_engine
 DB_USER=postgres
 DB_PASSWORD=0088
 STOCKFISH_PATH=C:\Users\karlb\chess-study-engine\stockfish\stockfish-windows-x86-64-avx2.exe
+POLYGLOT_BOOK_PATH=C:\Users\karlb\chess-study-engine\books\gm2001.bin
+SYZYGY_PATH=C:\Users\karlb\chess-study-engine\syzygy
 ```
 
 ### PostgreSQL
@@ -2684,12 +2771,39 @@ C:\Users\karlb\chess-study-engine\
 ├── schema_update2.py       (second schema migration)
 ├── analyze_games.py        (Stockfish analysis engine)
 ├── CONTEXT.md              (this file)
-├── venv/                   (Python virtual environment)
-└── stockfish/
-    ├── stockfish-windows-x86-64-avx2.exe
-    ├── scripts/
-    ├── src/
-    └── wiki/
+├── venv/                   (Python virtual environment — gitignored)
+├── stockfish/              (gitignored — download separately)
+│   └── stockfish-windows-x86-64-avx2.exe
+├── books/                  (gitignored — download separately)
+│   └── gm2001.bin          (475KB Polyglot opening book)
+└── syzygy/                 (gitignored — download separately, 938MB)
+    └── *.rtbw, *.rtbz      (290 Syzygy tablebase files)
+```
+
+### Downloading Large Binary Files (not in git)
+These files must be downloaded manually before first run:
+
+**Stockfish (111MB):**
+Download Windows AVX2 version from https://stockfishchess.org/download/
+Place at: `stockfish\stockfish-windows-x86-64-avx2.exe`
+
+**Polyglot book (475KB):**
+Download gm2001.bin from https://github.com/michaeldv/donna_opening_books
+Place at: `books\gm2001.bin`
+
+**Syzygy tablebases (938MB, 290 files):**
+```powershell
+$base   = "http://tablebase.sesse.net/syzygy/3-4-5/"
+$outDir = "C:\Users\karlb\chess-study-engine\syzygy"
+New-Item -ItemType Directory -Force $outDir | Out-Null
+$listing = Invoke-WebRequest -Uri $base -UseBasicParsing
+$files   = $listing.Links | Where-Object { $_.href -match '\.(rtbw|rtbz)$' } | ForEach-Object { $_.href }
+foreach ($f in $files) {
+    $dest = Join-Path $outDir $f
+    if (-not (Test-Path $dest)) {
+        (New-Object System.Net.WebClient).DownloadFile("$base$f", $dest)
+    }
+}
 ```
 
 ### GitHub and Claude Code
@@ -2700,14 +2814,17 @@ Update CONTEXT.md whenever significant decisions are made or designs change.
 
 ### Running the Analysis
 ```powershell
-# Standard sequential batch of 20
+# Standard sequential batch of 20 (for testing)
+cd C:\Users\karlb\chess-study-engine
+.\venv\Scripts\Activate.ps1
 python analyze_games.py
 
-# To change batch size, edit __main__ block:
-run_analysis_queue(batch_size=50, parallel=False)
-
-# To enable parallel (use all CPU cores):
-run_analysis_queue(batch_size=100, parallel=True)
+# Full overnight parallel run (11 workers, all remaining games):
+cd C:\Users\karlb\chess-study-engine
+.\venv\Scripts\Activate.ps1
+python -c "from analyze_games import run_analysis_queue; run_analysis_queue(batch_size=11000, parallel=True)"
+# Expected: ~18 hours for 10,836 games at 9.9 games/min (11 workers)
+# Leave running in a dedicated PowerShell window — do not close it
 ```
 
 ### Checking Queue Status

@@ -202,23 +202,19 @@ def accuracy_lichess(cpl) -> float | None:
 
 def accuracy_chesscom(
     wins_before, draws_before, losses_before,
-    wins_after,  draws_after,  losses_after
+    eval_before, eval_after
 ) -> float | None:
     """
-    Chess.com-style win probability delta accuracy.
+    Chess.com-style accuracy using engine CP evals directly.
+    win_prob_from_cp(eval_before/after) gives the actual engine estimate,
+    distinct from WDL which uses trained outcome probabilities.
     Position-aware — discounts already-decided positions.
     """
-    if wins_before is None or wins_after is None:
+    if eval_before is None or eval_after is None:
         return None
 
-    cp_b = wdl_to_cp(wins_before, draws_before, losses_before)
-    cp_a = wdl_to_cp(wins_after,  draws_after,  losses_after)
-
-    if cp_b is None or cp_a is None:
-        return None
-
-    wp_before = win_prob_from_cp(cp_b)
-    wp_after  = win_prob_from_cp(cp_a)
+    wp_before = win_prob_from_cp(eval_before)
+    wp_after  = win_prob_from_cp(eval_after)
 
     raw = max(0.0, min(1.0, 1.0 - abs(wp_before - wp_after)))
 
@@ -711,7 +707,7 @@ def analyze_single_game(game_id: int) -> dict:
         if is_player_move:
             acc_w = accuracy_wdl(wdl_b_w, wdl_b_d, wdl_b_l, wdl_a_w, wdl_a_d, wdl_a_l)
             acc_l = accuracy_lichess(cpl)
-            acc_c = accuracy_chesscom(wdl_b_w, wdl_b_d, wdl_b_l, wdl_a_w, wdl_a_d, wdl_a_l)
+            acc_c = accuracy_chesscom(wdl_b_w, wdl_b_d, wdl_b_l, best_cp, eval_after)
             if acc_w is not None: p_acc_wdl.append(acc_w)
             if acc_l is not None: p_acc_lichess.append(acc_l)
             if acc_c is not None: p_acc_chesscom.append(acc_c)

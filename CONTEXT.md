@@ -2123,6 +2123,41 @@ The player_snapshots table captures full weakness profile at any date.
 Enables: "here's what your game looked like 3 months ago vs today"
 With real data behind it — not just Elo, but specific concepts that improved.
 
+### Progressive Analysis UX
+When a new user signs up and their games are being analyzed, do not make them
+wait for 100% completion before showing results. Show a progressive weakness
+profile that updates as more games are analyzed.
+
+**Confidence tiers:**
+```
+≥  50 games analyzed: preliminary profile, low confidence indicators
+≥ 200 games analyzed: emerging patterns, medium confidence
+≥ 500 games analyzed: full profile, high confidence
+= all games analyzed: complete profile
+```
+
+Every weakness card and insight shown to the user must include a confidence label:
+```
+"Based on 127 of 1,847 games analyzed (7%) — insights will improve"
+"Based on 891 of 1,847 games analyzed (48%) — moderate confidence"
+"Based on 1,847 of 1,847 games analyzed (100%)"
+```
+
+**Why this works:**
+- The priority queue already analyzes most-relevant games first (recent losses
+  at current Elo bracket), so early results are the most representative sample
+- Users see immediate value and watch it improve — better retention than a blank screen
+- Transparent confidence labeling prevents confusion when results shift as more
+  games are analyzed
+- Weakness patterns emerging from 50 games are real signal, not noise
+
+**Parallel analysis ordering note:**
+Parallel analysis completes games in non-deterministic order (worker completion
+order, not priority order) — this is fine for data quality but the user-facing
+feed should sort by game date descending regardless of analysis completion order.
+The weakness_graph aggregation must weight by recency regardless of the order
+in which analysis jobs happen to finish.
+
 ---
 
 ## 19. Performance and Scalability
@@ -2222,6 +2257,29 @@ Railway:            $5/month, 1GB, good developer experience
 Neon:               free tier, serverless Postgres, auto-scaling
 DigitalOcean:       $15/month, managed, daily backups
 ```
+
+### Cerebellum Opening Book (Medium Priority)
+The current `gm2001.bin` Polyglot book covers theory to approximately move 12
+on average. The Cerebellum book (used by Stockfish's online play) covers theory
+to move 30+ — significantly deeper for players who know theory well.
+
+**Why it matters for novelty_move accuracy:**
+If a player knows a line to move 22 but gm2001.bin only covers to move 12,
+`novelty_move` is set to 12 and moves 12–22 receive full Stockfish analysis
+(wasted compute) plus incorrect `moves_since_novelty` counts. This degrades
+opening performance tracking and preparation gap detection for well-prepared
+players.
+
+**Download status:** UNVERIFIED — do not use the official-stockfish/books
+GitHub URL (that repo does not exist). Investigate these sources before
+integrating:
+- https://rebel13.nl/download/books.html
+- Search "Cerebellum opening book download" for current hosting
+- The Cerebellum project may have its own distribution site
+
+**Priority:** Medium — implement after full analysis run completes and the
+weakness aggregation layer is built. Update POLYGLOT_BOOK_PATH in .env once
+a verified source is confirmed.
 
 ### Future: Distributed Analysis
 When user base grows:

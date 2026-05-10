@@ -4,8 +4,9 @@ import time
 import chess
 import chess.engine
 import chess.pgn
+import chess.polyglot
+import chess.syzygy
 import io
-import requests
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from dotenv import load_dotenv
@@ -283,10 +284,15 @@ def classify_mistake(score: float, cpl, thresholds) -> str | None:
 
 
 # ─── Time pressure ────────────────────────────────────────────────────────────
-def classify_time_pressure(clock_ms, total_time_ms, thresholds) -> str | None:
+def classify_time_pressure(clock_ms, total_time_ms, increment_ms, total_moves, move_number, thresholds) -> str | None:
     if not clock_ms or not total_time_ms or total_time_ms == 0:
         return None
-    pct = clock_ms / total_time_ms
+    if increment_ms and total_moves and move_number:
+        moves_remaining = max(1, (total_moves - move_number) / 2)
+        effective_clock = clock_ms + increment_ms * moves_remaining
+    else:
+        effective_clock = clock_ms
+    pct = effective_clock / total_time_ms
     if pct <= thresholds.get('critical_time_pct', 0.08): return 'critical'
     if pct <= thresholds.get('low_time_pct',      0.18): return 'low'
     if pct <= thresholds.get('normal_time_pct',   0.40): return 'normal'
@@ -359,19 +365,66 @@ def analyse_position(engine, board, phase, prev_cpl, total_moves, move_num, thre
     return info, elapsed
 
 
-# ─── Lichess opening explorer ─────────────────────────────────────────────────
-def is_book_move(fen: str, move_uci: str) -> bool:
+# ─── Polyglot opening book ────────────────────────────────────────────────────
+def open_polyglot_book():
+    path = os.getenv('POLYGLOT_BOOK_PATH')
+    if path and os.path.exists(path):
+        try:
+            return chess.polyglot.open_reader(path)
+        except Exception:
+            pass
+    return None
+
+
+def is_book_move(book, board: chess.Board, move: chess.Move) -> bool:
+    if book is None:
+        return False
     try:
-        resp = requests.get(
-            'https://explorer.lichess.ovh/lichess',
-            params={'fen': fen, 'moves': 10, 'speeds': 'blitz,rapid', 'ratings': '1400,1600,1800'},
-            timeout=2
-        )
-        if resp.status_code == 200:
-            return move_uci in [m['uci'] for m in resp.json().get('moves', [])]
+        return any(e.move == move for e in book.find_all(board))
     except Exception:
-        pass
-    return False
+        return False
+
+
+# ─── Syzygy tablebases ────────────────────────────────────────────────────────
+def open_syzygy():
+    path = os.getenv('SYZYGY_PATH')
+    if path and os.path.exists(path):
+        try:
+            return chess.syzygy.open_tablebase(path)
+        except Exception:
+            pass
+    return None
+
+
+def get_tablebase_info(board_before, board_after, syzygy_tb) -> tuple:
+    """Returns (result, dtz, deviation) from side-to-move's perspective before the move."""
+    if syzygy_tb is None:
+        return None, None, None
+    if bin(board_before.occupied).count('1') > 5:
+        return None, None, None
+    try:
+        dtz = syzygy_tb.get_dtz(board_before)
+        if dtz is None:
+            wdl = syzygy_tb.get_wdl(board_before)
+            if wdl is None:
+                return None, None, None
+            result = {2: 'win', 1: 'win', 0: 'draw', -1: 'loss', -2: 'loss'}.get(wdl)
+            return result, None, None
+        if dtz > 0:   result = 'win'
+        elif dtz < 0: result = 'loss'
+        else:         result = 'draw'
+        deviation = None
+        if bin(board_after.occupied).count('1') <= 5 and dtz != 0:
+            try:
+                dtz_after = syzygy_tb.get_dtz(board_after)
+                if dtz_after is not None:
+                    expected = -(dtz - 1) if dtz > 0 else -(dtz + 1)
+                    deviation = dtz_after - expected
+            except Exception:
+                pass
+        return result, dtz, deviation
+    except Exception:
+        return None, None, None
 
 
 # ─── Candidate count ──────────────────────────────────────────────────────────
@@ -467,6 +520,8 @@ def analyze_single_game(game_id: int) -> dict:
     total_time_ms = get_total_time_ms(time_control)
     increment_ms  = get_increment_ms(time_control)
     thresholds    = load_thresholds(game_type)
+    poly_reader   = open_polyglot_book()
+    syzygy_tb     = open_syzygy()
 
     if total_moves is not None and total_moves < MIN_GAME_MOVES:
         cur.execute("UPDATE analysis_queue SET status='complete', completed_at=NOW() WHERE game_id=%s", (game_id,))
@@ -534,8 +589,8 @@ def analyze_single_game(game_id: int) -> dict:
         o_clock = opp_clock_before_ms if is_player_move else clock_before_ms
         p_spent = time_spent_ms       if is_player_move else opp_time_spent_ms
 
-        tp     = classify_time_pressure(p_clock, total_time_ms, thresholds)
-        opp_tp = classify_time_pressure(o_clock, total_time_ms, thresholds)
+        tp     = classify_time_pressure(p_clock, total_time_ms, increment_ms, total_moves, move_number, thresholds)
+        opp_tp = classify_time_pressure(o_clock, total_time_ms, increment_ms, total_moves, move_number, thresholds)
 
         is_premove = is_player_move and p_spent is not None and \
                      p_spent < int(thresholds.get('premove_ms', 500))
@@ -547,7 +602,7 @@ def analyze_single_game(game_id: int) -> dict:
         # ── Book move ────────────────────────────────────────────────────
         book = False
         if novelty_move is None:
-            book = is_book_move(fen_before, move.uci())
+            book = is_book_move(poly_reader, board, move)
             if not book and i >= 4:
                 novelty_move = move_number
 
@@ -610,8 +665,18 @@ def analyze_single_game(game_id: int) -> dict:
 
         is_sac, sac_type = detect_sacrifice(board, move, best_move_uci, None)
 
+        # ── Tablebase snapshot — capture board before push ────────────────
+        pieces_now = bin(board.occupied).count('1')
+        board_snap = board.copy() if pieces_now <= 5 else None
+
         # ── Make move ────────────────────────────────────────────────────
         board.push(move)
+
+        # ── Tablebase lookup (5 pieces or fewer) ──────────────────────────
+        if board_snap is not None:
+            tb_result, tb_dtz, tb_deviation = get_tablebase_info(board_snap, board, syzygy_tb)
+        else:
+            tb_result = tb_dtz = tb_deviation = None
 
         # ── Analyse after move ───────────────────────────────────────────
         info_after = engine.analyse(
@@ -759,10 +824,15 @@ def analyze_single_game(game_id: int) -> dict:
             'swindle_attempt':       is_swindle,
             'analysis_quality':      a_quality,
             'analysis_confidence':   a_confidence,
+            'tablebase_result':      tb_result,
+            'tablebase_dtz':         tb_dtz,
+            'tablebase_deviation':   tb_deviation,
             **psych,
         })
 
     engine.quit()
+    if poly_reader: poly_reader.close()
+    if syzygy_tb:   syzygy_tb.close()
 
     # ── Drift detection ────────────────────────────────────────────────────
     p_ann = [a for a in annotations if a.get('centipawn_loss') is not None]
@@ -840,7 +910,8 @@ def analyze_single_game(game_id: int) -> dict:
                     missed_salvation=%s, salvation_eval_swing=%s,
                     resignation_mindset_flag=%s, complacency_flag=%s,
                     drift_flag=%s, cumulative_drift_5=%s,
-                    analysis_quality=%s, analysis_confidence=%s
+                    analysis_quality=%s, analysis_confidence=%s,
+                    tablebase_result=%s, tablebase_dtz=%s, tablebase_deviation=%s
                 WHERE id=%s
             """, (
                 ann.get('eval_before'), ann.get('eval_after'), ann.get('best_eval'),
@@ -865,6 +936,7 @@ def analyze_single_game(game_id: int) -> dict:
                 ann.get('resignation_mindset_flag', False), ann.get('complacency_flag', False),
                 ann.get('drift_flag', False), ann.get('cumulative_drift_5'),
                 ann.get('analysis_quality'), ann.get('analysis_confidence'),
+                ann.get('tablebase_result'), ann.get('tablebase_dtz'), ann.get('tablebase_deviation'),
                 ann['move_id'],
             ))
 

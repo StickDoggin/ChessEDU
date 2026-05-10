@@ -577,6 +577,10 @@ def analyze_single_game(game_id: int) -> dict:
         depth_reached = info[0].get('depth', 0) if info else 0
         best_cp       = extract_cp(info[0]['score'].relative) if info else None
         best_move_uci = info[0]['pv'][0].uci() if info and info[0].get('pv') else None
+        try:
+            best_move_san = board.san(info[0]['pv'][0]) if info and info[0].get('pv') else None
+        except Exception:
+            best_move_san = None
 
         # WDL before move — from player's perspective
         wdl_b_w, wdl_b_d, wdl_b_l = (None, None, None)
@@ -711,6 +715,7 @@ def analyze_single_game(game_id: int) -> dict:
             'best_eval':             best_cp,
             'centipawn_loss':        cpl,
             'best_move_uci':         best_move_uci,
+            'best_move_san':         best_move_san,
             'pv_line_1':             pv_lines[0] if len(pv_lines) > 0 else None,
             'pv_line_2':             pv_lines[1] if len(pv_lines) > 1 else None,
             'pv_line_3':             pv_lines[2] if len(pv_lines) > 2 else None,
@@ -817,7 +822,7 @@ def analyze_single_game(game_id: int) -> dict:
             cur.execute("""
                 UPDATE moves SET
                     eval_before=%s, eval_after=%s, best_eval=%s,
-                    centipawn_loss=%s, best_move_uci=%s,
+                    centipawn_loss=%s, best_move_uci=%s, best_move_san=%s,
                     pv_line_1=%s, pv_line_2=%s, pv_line_3=%s, pv_line_4=%s, pv_line_5=%s,
                     played_move_rank=%s, played_move_cp=%s, analysis_depth=%s,
                     wdl_wins_before=%s, wdl_draws_before=%s, wdl_losses_before=%s,
@@ -839,7 +844,7 @@ def analyze_single_game(game_id: int) -> dict:
                 WHERE id=%s
             """, (
                 ann.get('eval_before'), ann.get('eval_after'), ann.get('best_eval'),
-                ann.get('centipawn_loss'), ann.get('best_move_uci'),
+                ann.get('centipawn_loss'), ann.get('best_move_uci'), ann.get('best_move_san'),
                 ann.get('pv_line_1'), ann.get('pv_line_2'), ann.get('pv_line_3'),
                 ann.get('pv_line_4'), ann.get('pv_line_5'),
                 ann.get('played_move_rank'), ann.get('played_move_cp'),
@@ -864,12 +869,6 @@ def analyze_single_game(game_id: int) -> dict:
             ))
 
     # ── Update game ────────────────────────────────────────────────────────
-    cur.execute("""
-        ALTER TABLE games
-        ADD COLUMN IF NOT EXISTS accuracy_wdl      FLOAT,
-        ADD COLUMN IF NOT EXISTS accuracy_lichess  FLOAT,
-        ADD COLUMN IF NOT EXISTS accuracy_chesscom FLOAT;
-    """)
     cur.execute("""
         UPDATE games SET
             analyzed=TRUE, analyzed_at=NOW(),

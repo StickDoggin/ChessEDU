@@ -1,0 +1,5 @@
+stockfish/stockfish-windows-x86-64-avx2.exe
+venv/
+.env
+__pycache__/
+*.pyc

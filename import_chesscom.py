@@ -30,6 +30,51 @@ def parse_clock(comment: str) -> int | None:
         return (h * 3600 + m * 60 + s) * 1000
     return None
 
+# Opening name terminators — the word that ends an opening's primary name.
+# First match in the hyphenated path splits name vs variation.
+_OPENING_MARKERS = [
+    'Defense', 'Defence', 'Opening', 'Gambit', 'Attack',
+    'Game', 'System', 'Method', 'Formation', 'Setup', 'Line',
+]
+
+def parse_ecourl(url: str) -> tuple:
+    """
+    Parse a chess.com ECOUrl into (opening_name, opening_var).
+
+    chess.com PGN uses ECOUrl instead of separate Opening/Variation tags.
+    Example: '.../openings/Caro-Kann-Defense-Classical-Variation...7.Nf3'
+      -> ('Caro Kann Defense', 'Classical Variation')
+    """
+    if not url:
+        return None, None
+    path = url.split('/openings/')[-1] if '/openings/' in url else url
+    # Drop move continuation (after literal '...' or '-N.' patterns)
+    path = path.split('...')[0]
+    path = re.sub(r'-\d+$', '', path)          # trailing move number
+    path = re.sub(r'-\d+\..+$', '', path)      # inline move like -5.Re1
+    path = path.strip('-').strip()
+
+    words = path.replace('-', ' ').strip()
+    if not words or words == 'Undefined':
+        return None, None
+
+    # Find the earliest-occurring marker (first left-to-right in the string)
+    # so "Ruy Lopez Opening Berlin Defense" splits at "Opening", not "Defense"
+    best_end = None
+    for marker in _OPENING_MARKERS:
+        idx = words.find(marker)
+        if idx >= 0:
+            end = idx + len(marker)
+            if best_end is None or end < best_end:
+                best_end = end
+
+    if best_end is not None:
+        opening  = words[:best_end].strip() or None
+        variation = words[best_end:].strip() or None
+        return opening, variation
+
+    return words or None, None
+
 def get_or_create_player(cur, username: str) -> int:
     cur.execute("""
         INSERT INTO players (username, platform)
@@ -97,22 +142,22 @@ def parse_and_insert_game(cur, game_data: dict, player_id: int, username: str):
     end_time = game_data.get("end_time")
     played_at = datetime.fromtimestamp(end_time, tz=timezone.utc) if end_time else None
 
-    opening_eco = headers.get("ECO", None)
-    opening_name = headers.get("Opening", None)
-    total_moves = sum(1 for _ in game.mainline_moves())
+    opening_eco  = headers.get("ECO", None)
+    opening_name, opening_var = parse_ecourl(headers.get("ECOUrl", None))
+    total_moves  = sum(1 for _ in game.mainline_moves())
 
     cur.execute("""
         INSERT INTO games (
             player_id, source, source_game_id, played_at, color, result, result_type,
             time_control, game_type, player_elo, opponent_elo,
-            opening_eco, opening_name, total_moves, raw_pgn
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            opening_eco, opening_name, opening_var, total_moves, raw_pgn
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (source, source_game_id) DO NOTHING
         RETURNING id
     """, (
         player_id, PLATFORM, source_game_id, played_at, color, result, player_result,
         time_control, game_type, player_elo, opponent_elo,
-        opening_eco, opening_name, total_moves, pgn_text
+        opening_eco, opening_name, opening_var, total_moves, pgn_text
     ))
 
     row = cur.fetchone()

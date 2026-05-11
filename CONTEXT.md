@@ -2455,7 +2455,7 @@ gitignored — download with the PowerShell script in Section 26.
 - [x] 10,921 games imported from Chess.com (StickDoggin)
 - [x] Current ratings fetched (rapid=1656, blitz=1632)
 - [x] Analysis queue populated with priority scores (10,921 games)
-- [x] ~85 games analyzed (validation batches)
+- [x] **6,088/10,921 games analyzed (56% — full run in progress as of 2026-05-11)**
 - [x] Stockfish 18.3 installed and working
 - [x] Hybrid time/depth analysis system working
 - [x] Three accuracy models implemented (WDL=85–89%, Lichess=35–63%, Chess.com=85–89%)
@@ -2469,6 +2469,32 @@ gitignored — download with the PowerShell script in Section 26.
 - [x] best_move_san stored alongside best_move_uci
 - [x] 58 default thresholds in database
 - [x] Parallel analysis mode available (11 workers on this machine)
+- [x] Session detector: 2,718 sessions grouped, tilt=5.4%, fatigue=8.4%
+- [x] Weakness aggregator: produces ranked weakness profile with study recommendations
+- [x] 5,441,692 Lichess puzzles seeded (23 min, 3,910/s) — all concept codes mapped
+- [x] Drill session engine: SM-2 spaced repetition, 70/30 own-game/Lichess mix
+- [x] Opening prep gap detector: recency-weighted, 90-day half-life, stale>180d filter
+- [x] opening_name/opening_var backfilled from ECOUrl for all 10,890 games (99.7%)
+
+### Opening Prep Gap Results (as of 2026-05-11, 56% analyzed)
+
+10 active gaps detected, 27 lines correctly excluded as stale (>180 days old):
+
+**Confirmed Recent (active gaps):**
+- A45 Indian Game — 15d ago, 3.82x baseline, 72% loss rate (strongest gap)
+- D02 London System — 6d ago, 1.73x baseline, 50% loss rate (very recent)
+- B22 Alapin Sicilian Defense — 37d ago, 1.47x, 43% loss rate
+- C64 Ruy Lopez - Classical Central Variation — 35d ago, 1.47x, 78% loss rate
+- D00 Queens Pawn Opening — 85d ago, 1.33x, 100% loss rate
+- B12 Advance Botvinnik Carls Defense — 9d ago, 1.26x, 12% loss rate
+
+**Historically Stale (correctly excluded):**
+- A04 Kingside Fianchetto (230d), C23 Bishop's Opening (613d), C20 (601d),
+  C21 Center Game (632d), B40 French Variation (250d) — all pre-2025 patterns
+
+**Pre-fix comparison:** The unweighted version showed C65/A30/B30 as top gaps with
+ratios of 4.23/3.92/2.98 — but all three were stale (not played recently). The
+recency-weighted version correctly surfaced the current gaps instead.
 
 ### Known Bugs / Issues
 
@@ -2535,19 +2561,28 @@ the inputs were not pre-clamped. 100 rows had CPL 500-10565.
 Fix: Pre-clamp both eval inputs to [-1000, +1000] before subtraction.
 Cleanup: `UPDATE moves SET centipawn_loss = 500 WHERE centipawn_loss > 500` — fixed.
 
-### Data Status
+### Data Status (as of 2026-05-11)
 ```
-Database:       chess_engine on PostgreSQL 18.3
-Player:         StickDoggin (chess.com, id=1)
-Games:          10,921 imported
-Games analyzed: ~85 (validation batches — all features confirmed working)
-Games pending:  ~10,836 in analysis_queue
-Moves in DB:    ~819,075 (10,921 × avg 75 moves)
-Moves analyzed: ~6,375 (85 games × avg 75 moves)
-Concepts:       176
-Thresholds:     58 default rows
-Machine:        12 logical cores → 11 parallel workers
-Est. full run:  ~18 hours parallel (10,836 ÷ 9.9 games/min)
+Database:          chess_engine on PostgreSQL 18.3
+Player:            StickDoggin (chess.com, id=1)
+Games:             10,921 imported
+Games analyzed:    6,088 / 10,921 (56% — full run in progress)
+Games pending:     4,833 in analysis_queue
+Moves in DB:       ~819,075 (10,921 x avg 75 moves)
+Concepts:          176
+Thresholds:        58 default rows
+Drill positions:   5,441,692 (Lichess puzzles, all concept codes)
+Sessions:          2,718 detected (avg 4.0 games, max 58)
+Machine:           12 logical cores -> 11 parallel workers
+```
+
+### Post-Full-Run Checklist (run IN ORDER after analysis completes)
+```
+1. python recalc_chesscom_accuracy.py        # fix circular bug in May 2026 run
+2. python pattern_detector.py               # apply 3.3.6 demotion to all games
+3. python session_detector.py --clear       # regroup sessions with final data
+4. python opening_prep_gap.py 1 --save      # save recency-weighted gaps
+5. python weakness_aggregator.py 1 all      # generate final weakness profile
 ```
 
 ---
@@ -2577,23 +2612,21 @@ Est. full run:  ~18 hours parallel (10,836 ÷ 9.9 games/min)
 - [ ] Implement opponent capitalization (second pass analysis)
 
 ### Phase 3: Pattern Detection
-- [ ] Mathematical pattern detector (fork, pin, skewer, back-rank, hanging piece)
-  Using python-chess attack maps: board.attacks(), board.is_attacked_by(),
-  board.attackers(), board.pin(), board.is_pinned()
+- [x] Mathematical pattern detector — pattern_detector.py (fork, pin, skewer, etc.)
+- [x] Concept tagger — per-game, populates move_concepts table
+- [x] Session detector — groups within 2h, detects tilt + fatigue
+- [x] Opening preparation gap detector — recency-weighted, 90d half-life
 - [ ] Positional feature extractor (Silman's seven imbalances)
-  Computable from FEN: pawn structure, piece activity, space, king safety, material
-- [ ] Concept tagger (populates move_concepts table)
-- [ ] Session detector (groups games within 2 hours)
-- [ ] Tilt detector (CPL spike after losses in same session)
-- [ ] Opening preparation gap detector
+- [ ] Opponent capitalization second pass
 
 ### Phase 4: Weakness Aggregation
-- [ ] Cross-game weakness aggregator (populates weakness_graph)
-- [ ] Recency and Elo proximity weighting applied
-- [ ] Exploitability score computation
-- [ ] Elo impact estimation (initial heuristic version)
+- [x] Cross-game weakness aggregator — weakness_aggregator.py
+- [x] Recency + Elo proximity weighting (0.5^(days/90) * exp(-dElo^2/45000))
+- [x] Elo impact estimation (heuristic: min(50, avg_cpl*occurrence_rate*0.15))
+- [x] Session-level psychological weaknesses (tilt, fatigue) in weakness_graph
+- [x] Opening prep gaps in weakness_graph (game_type='opening')
 - [ ] Point-in-time snapshot generator (player_snapshots table)
-- [ ] Evaluation state performance aggregator (evaluation_state_performance table)
+- [ ] Evaluation state performance aggregator
 
 ### Phase 5: Statistical ML
 - [ ] Install Microsoft C++ Build Tools (for ruptures library)
@@ -2603,13 +2636,14 @@ Est. full run:  ~18 hours parallel (10,836 ÷ 9.9 games/min)
 - [ ] Personal threshold updates in player_thresholds table
 
 ### Phase 6: Study Modules (Basic)
-- [ ] Drill position generator (extracts blunder positions from games)
-- [ ] SM-2 spaced repetition scheduler
+- [x] Drill position seeding — 5,441,692 Lichess puzzles across all concept codes
+- [x] SM-2 spaced repetition scheduler — drill_session.py
+- [x] Concept study mapping — seed_curriculum.py (83 rows)
+- [x] Prescription engine — weakness_aggregator.py generate_prescription()
 - [ ] Opening deviation drill (using novelty_move data)
-- [ ] Concept study mapping (seed initial data from chess literature)
-- [ ] Basic prescription engine (ranks weaknesses by efficiency)
+- [ ] Player's own game positions seeded to drill_positions (from pattern_detector)
 
-### Phase 7: Frontend/API
+### Phase 7: Frontend/API  <- NEXT PRIORITY
 - [ ] REST API layer (FastAPI recommended)
 - [ ] Authentication system
 - [ ] Basic web dashboard (React + Recharts)
@@ -2727,6 +2761,40 @@ calculation. A grandmaster doesn't calculate a fork — they SEE it.
 - Drill repetition builds **pattern libraries**, and pattern libraries
   **replace** calculation. This is the entire theoretical basis of tactical
   training at sub-GM levels.
+
+### 12. Recency Weighting Is Not Optional — It Is Correctness
+
+All weakness detection, gap scoring, and time-ratio calculations MUST apply
+exponential recency decay. A weakness from 3 years ago at a different Elo
+bracket is near-irrelevant to today's player. Treating it equally with last
+week's game produces a false diagnosis.
+
+**Decay formula:** `weight = 0.5 ^ (days_since_game / HALF_LIFE_DAYS)`
+
+Where `HALF_LIFE_DAYS = 90` (weight halves every 90 days):
+- Today:    1.000  |  90d: 0.500  |  180d: 0.250
+- 1 year:   0.077  |  2yr: 0.006  |  3yr:  0.0004
+
+**Staleness filter:** Any line/pattern not seen in `STALE_DAYS = 180` is marked
+stale and excluded from active flagging regardless of historical score.
+
+**What recency weighting changed in opening prep gaps:**
+- Unweighted #1: C65 Ruy Lopez (4.23x ratio) — last played ~2018. Phantom gap.
+- Weighted #1:  A45 Indian Game (3.82x ratio, 15d ago). Real, current gap.
+- 27 of 37 previously flagged lines correctly reclassified as stale.
+
+**System-wide application:** weakness_aggregator.py, opening_prep_gap.py,
+session_detector.py, and any future detector must use the same formula.
+
+### Next Build Priorities (after full analysis completes)
+
+1. **API layer** — FastAPI, endpoints for weakness profile and drill serving
+2. **Basic frontend** — React, weakness dashboard, drill board (Chessground)
+3. **Opening drill module** — serve positions from prep gap lines specifically
+4. **Player's own game positions** — seed drill_positions from pattern_detector
+   output (own game positions are more memorable than Lichess puzzles)
+5. **Opponent capitalization** — second-pass analysis to score how well the
+   opponent punished each player mistake
 
 ---
 

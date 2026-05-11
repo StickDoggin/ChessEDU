@@ -690,14 +690,22 @@ def analyze_single_game(game_id: int) -> dict:
         eval_after      = -score_after_rel if score_after_rel is not None else None
 
         # ── CPL — capped before storage ──────────────────────────────────
+        # NOTE: when best_cp is a mate score (±9999) and eval_after is the
+        # opposite mate score (-9999), cpl_raw can reach ~20000.  The cap
+        # is critical here.  cap(best_cp) before subtraction so the gap
+        # between two extreme scores never exceeds CPL_CAP.
         if is_player_move and best_cp is not None and eval_after is not None:
-            cpl_raw = max(0, best_cp - eval_after)
-            cpl     = min(cpl_raw, CPL_CAP)
+            safe_before = max(-CPL_CAP * 2, min(CPL_CAP * 2, best_cp))
+            safe_after  = max(-CPL_CAP * 2, min(CPL_CAP * 2, eval_after))
+            cpl_raw     = max(0, safe_before - safe_after)
+            cpl         = min(cpl_raw, CPL_CAP)
         else:
             cpl = None
 
         if not is_player_move and best_cp is not None and eval_after is not None:
-            opp_cpl_raw = max(0, best_cp - eval_after)
+            safe_before = max(-CPL_CAP * 2, min(CPL_CAP * 2, best_cp))
+            safe_after  = max(-CPL_CAP * 2, min(CPL_CAP * 2, eval_after))
+            opp_cpl_raw = max(0, safe_before - safe_after)
             opp_cpl     = min(opp_cpl_raw, CPL_CAP)
             o_cpls.append(opp_cpl)
         else:

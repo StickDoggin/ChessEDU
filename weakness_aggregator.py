@@ -40,8 +40,8 @@ EXERCISE_COUNTS = {
     '3.4.2':  60, '4.1.1':  50, '4.1.2':  40, '4.1.4':  50, '4.1.5':  55,
     '4.2.1':  70, '4.2.2':  45, '4.2.3':  50, '4.2.4':  80, '4.3.3':  60,
     '4.4.2':  55, '4.4.3':  50, '6.1':   100, '6.2':   200, '6.2.1': 120,
-    '6.2.2':  80, '6.3.1': 253, '6.3.2':  90, '6.3.3': 100, '7.1.2':  40,
-    '7.3.4':  30,
+    '6.2.2':  80, '6.3.1': 253, '6.3.2':  90, '6.3.3': 100, '7.1.1':  45,
+    '7.1.2':  40, '7.3.1':  30, '7.3.4':  30,
 }
 DEFAULT_EX_COUNT = 60
 
@@ -421,14 +421,15 @@ def generate_prescription(player_id, top_n=10):
     player_elo = (elo_by_type.get('blitz') or elo_by_type.get('rapid')
                   or next(iter(elo_by_type.values()), 1500))
 
-    # Active and improving weaknesses ordered by efficiency
+    # Active and improving weaknesses ordered by efficiency (all game_types)
     cur.execute("""
         SELECT wg.concept_code, c.name,
                wg.occurrence_count, wg.occurrence_rate,
                wg.avg_cpl_when_occurs, wg.estimated_elo_impact,
                wg.study_efficiency, wg.primary_study_module,
                wg.avg_attribution_weight, wg.trend_30_days,
-               wg.first_detected, wg.last_occurred, wg.status
+               wg.first_detected, wg.last_occurred, wg.status,
+               wg.game_type
         FROM weakness_graph wg
         JOIN concepts c ON c.code = wg.concept_code
         WHERE wg.player_id = %s AND wg.status IN ('active', 'improving')
@@ -450,7 +451,7 @@ def generate_prescription(player_id, top_n=10):
     for row in all_active:
         (code, name, occ_count, occ_rate, avg_cpl, elo_impact,
          efficiency, study_mod, avg_attr, trend_30,
-         first_detected, last_occurred, status) = row
+         first_detected, last_occurred, status, game_type) = row
 
         # Fetch 3 most recent example game/move IDs
         cur.execute("""
@@ -491,6 +492,7 @@ def generate_prescription(player_id, top_n=10):
             'trend_30_days':        round(trend_30 or 0, 3),
             'trend_label':          trend_lbl,
             'status':               status,
+            'game_type':            game_type,
             'example_game_ids':     ex_games,
             'example_move_ids':     ex_moves,
         }
@@ -599,12 +601,15 @@ def print_weakness_report(player_id):
         print()
         print(f'  [{r["concept_code"]}] {r["concept_name"]}')
         print(f'  {SEP}')
-        print(f'  How often:       {r["occurrence_rate"]:.2f} mistakes per 100 moves  ({r["occurrence_count"]:,} total)')
-        print(f'  Average CPL:     {r["avg_cpl"]:.0f}cp when this fires')
+        is_session = r.get('game_type') == 'session'
+        rate_label = 'sessions per 100' if is_session else 'mistakes per 100 moves'
+        print(f'  How often:       {r["occurrence_rate"]:.2f} {rate_label}  ({r["occurrence_count"]:,} total)')
+        print(f'  Average CPL:     {r["avg_cpl"]:.0f}cp {"extra during" if is_session else "when this fires"}')
         print(f'  Elo impact est:  +{r["estimated_elo_impact"]:.1f} Elo if fixed')
         print(f'  Study priority:  {r["study_efficiency"]:.2f} Elo/hour  ->  {r["primary_study_module"]}')
-        print(f'  Trend (30d):     {r["trend_label"]}  (d {r["trend_30_days"]:+.3f} mistakes/100 moves)')
-        print(f'  Signal quality:  avg attribution weight = {r["avg_attribution"]:.3f}')
+        if not is_session:
+            print(f'  Trend (30d):     {r["trend_label"]}  (d {r["trend_30_days"]:+.3f} mistakes/100 moves)')
+            print(f'  Signal quality:  avg attribution weight = {r["avg_attribution"]:.3f}')
         if r['example_game_ids']:
             print(f'  Example games:   {r["example_game_ids"]}')
             print(f'  Example moves:   {r["example_move_ids"]}')
@@ -628,6 +633,118 @@ def print_weakness_report(player_id):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# FUNCTION 5 — aggregate_session_weaknesses
+# ══════════════════════════════════════════════════════════════════════════════
+
+def aggregate_session_weaknesses(player_id):
+    """
+    Derive psychological weakness entries for tilt and fatigue from sessions.
+
+    occurrence_rate here = affected_sessions / total_sessions * 100
+    (reinterpreted from "per 100 moves" to "per 100 sessions" for display).
+    avg_cpl_when_occurs = extra CPL above baseline during affected sessions.
+    elo_impact capped at ELO_IMPACT_CAP like move-level weaknesses.
+    """
+    conn = get_connection()
+    cur  = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            COUNT(*)                                                AS total,
+            COUNT(*) FILTER (WHERE tilt_detected)                  AS tilt_count,
+            COUNT(*) FILTER (WHERE fatigue_detected)               AS fatigue_count,
+            AVG(avg_cpl)                                           AS avg_cpl,
+            AVG(tilt_coefficient) FILTER (WHERE tilt_detected
+                                      AND tilt_coefficient IS NOT NULL) AS avg_tilt_coeff,
+            MIN(started_at)                                        AS first_session,
+            MAX(started_at)                                        AS last_session
+        FROM sessions
+        WHERE player_id = %s
+    """, (player_id,))
+    row = cur.fetchone()
+    (total, tilt_count, fatigue_count,
+     avg_cpl_overall, avg_tilt_coeff,
+     first_session, last_session) = row
+
+    if not total or total == 0:
+        print(f"No sessions found for player {player_id}.")
+        cur.close(); conn.close()
+        return
+
+    avg_cpl_overall = float(avg_cpl_overall or 80.0)
+    avg_tilt_coeff  = float(avg_tilt_coeff  or 1.5)
+    today = date.today()
+
+    def _upsert(code, occ_count, occ_rate, avg_cpl_delta, study_mod, first, last):
+        elo_impact = min(ELO_IMPACT_CAP, avg_cpl_delta * occ_rate * 0.15)
+        ex_count   = EXERCISE_COUNTS.get(code, DEFAULT_EX_COUNT)
+        study_hrs  = ex_count * STUDY_MIN_PER_EX.get(study_mod, 2) / 60
+        efficiency = round(elo_impact / study_hrs, 2) if study_hrs > 0 else 0.0
+        days_since = (today - last.date()).days if last else 9999
+        status     = 'resolved' if days_since > 60 else 'active'
+        cur.execute("""
+            INSERT INTO weakness_graph
+                (player_id, concept_code, game_type,
+                 occurrence_count, occurrence_rate,
+                 avg_cpl_when_occurs, avg_attribution_weight,
+                 estimated_elo_impact, primary_study_module, status,
+                 first_detected, last_occurred,
+                 study_efficiency, estimated_study_hours,
+                 updated_at)
+            VALUES
+                (%(pid)s, %(code)s, 'session',
+                 %(occ)s, %(rate)s,
+                 %(cpl)s, 0.80,
+                 %(impact)s, %(mod)s, %(status)s,
+                 %(first)s, %(last)s,
+                 %(eff)s, %(hrs)s,
+                 NOW())
+            ON CONFLICT (player_id, concept_code, game_type) DO UPDATE SET
+                occurrence_count       = EXCLUDED.occurrence_count,
+                occurrence_rate        = EXCLUDED.occurrence_rate,
+                avg_cpl_when_occurs    = EXCLUDED.avg_cpl_when_occurs,
+                estimated_elo_impact   = EXCLUDED.estimated_elo_impact,
+                primary_study_module   = EXCLUDED.primary_study_module,
+                status                 = EXCLUDED.status,
+                first_detected         = EXCLUDED.first_detected,
+                last_occurred          = EXCLUDED.last_occurred,
+                study_efficiency       = EXCLUDED.study_efficiency,
+                estimated_study_hours  = EXCLUDED.estimated_study_hours,
+                updated_at             = NOW()
+        """, {
+            'pid': player_id, 'code': code, 'status': status,
+            'occ': int(occ_count),
+            'rate': round(occ_rate, 3),
+            'cpl': round(avg_cpl_delta, 1),
+            'impact': round(elo_impact, 1),
+            'mod': study_mod,
+            'eff': efficiency, 'hrs': round(study_hrs, 1),
+            'first': first.date() if first else None,
+            'last': last.date() if last else None,
+        })
+
+    # ── Tilt (7.3.1) ─────────────────────────────────────────────────────────
+    tilt_rate      = tilt_count / total * 100
+    # Extra CPL during tilt = baseline * (coeff - 1)
+    cpl_delta_tilt = avg_cpl_overall * (avg_tilt_coeff - 1.0)
+    _upsert('7.3.1', tilt_count, tilt_rate, cpl_delta_tilt, 'psychological', first_session, last_session)
+
+    # ── Fatigue / clock usage (7.1.1) ─────────────────────────────────────────
+    fatigue_rate      = fatigue_count / total * 100
+    cpl_delta_fatigue = avg_cpl_overall * 0.30
+    _upsert('7.1.1', fatigue_count, fatigue_rate, cpl_delta_fatigue, 'psychological', first_session, last_session)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    print(f"Session weaknesses upserted: "
+          f"7.3.1 tilt ({tilt_rate:.1f}% of {total} sessions, "
+          f"+{cpl_delta_tilt:.0f}cp), "
+          f"7.1.1 fatigue ({fatigue_rate:.1f}%, +{cpl_delta_fatigue:.0f}cp)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN — run full pipeline on player
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -639,4 +756,5 @@ if __name__ == '__main__':
     print(f'Running weakness aggregator for player_id={pid}, game_type={gt}...')
     aggregate_weakness_graph(pid, gt)
     compute_study_efficiency(pid)
+    aggregate_session_weaknesses(pid)
     print_weakness_report(pid)

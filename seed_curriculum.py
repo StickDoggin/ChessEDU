@@ -140,6 +140,7 @@ mappings = [
     ('5.2.3',  'opening_drill',    'dutch_hedgehog',          1200, 1800,  0.75),
     ('5.2.1',  'opening_drill',    'ruy_lopez_plans',         1000, 1600,  0.78),
     # PSYCHOLOGICAL
+    ('7.1.1',  'psychological',    'fatigue_management',       200, 2400,  0.78),
     ('7.1.2',  'psychological',    'draw_recognition',         200,  600,  0.70),
     ('7.3.1',  'psychological',    'calculation_training',    1600, 2400,  0.85),
 ]

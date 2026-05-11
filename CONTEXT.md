@@ -36,6 +36,7 @@
 24. [Design Principles — Never Violate These](#24-design-principles--never-violate-these)
 25. [Outstanding Questions and Open Items](#25-outstanding-questions-and-open-items)
 26. [Environment and Setup](#26-environment-and-setup)
+27. [Chess King University Curriculum Reference](#27-chess-king-university-curriculum-reference)
 
 ---
 
@@ -2899,7 +2900,129 @@ WHERE status='in_progress' AND started_at < NOW() - INTERVAL '15 minutes';
 
 ---
 
-*Last updated: May 9, 2026*
+---
+
+## 27. Chess King University Curriculum Reference
+
+**Source:** Chess King University curriculum, extracted May 2026.
+Three products analysed:
+- **CT-ART 4.0** — Tactics 1200–2400 (10 levels)
+- **Chess Middlegame I** — GM Alexander Kalinin — positional plans and pawn structures
+- **Total Chess Endings** — GM Alexander Panchenko — 1600–2400 endgame theory
+
+Data quality: exercise counts are exact. Elo brackets are approximate midpoints
+of the level labels used by Chess King. Used to calibrate `concept_study_mapping`
+`effectiveness_score` and `elo_bracket_min/max` values.
+
+---
+
+### Curriculum Elo Ladder (CT-ART 4.0 Levels)
+
+| Level | Approx. Elo | Key Theme |
+|-------|-------------|-----------|
+| 1     | 0–200       | Piece movement, captures |
+| 2–3   | 200–1000    | Basic tactics: forks, pins, mate in 1 |
+| 4     | 1000–1200   | Undermining (140 ex), discovered check, defend against mate |
+| 5–6   | 1200–1600   | Deflection (138 ex pawn shelter), decoy, interference, mate in 2 |
+| 7     | 1600–1800   | Calculation depth, rook endings (priority), Lucena/Philidor |
+| 8–9   | 1800–2200   | Rook endings advanced, bishop vs knight (253 ex), queen endings |
+| 10    | 2200–2400   | Rook vs minor piece, combination of methods, complex endings |
+
+---
+
+### Exercise Counts by Category (CT-ART 4.0 + Panchenko)
+
+**Tactical themes (CT-ART 4.0):**
+```
+Destruction of pawn shelter  138   (3.1.15) — weight as high as deflection
+Deflection                   ~120  (3.1.10)
+Decoy / lure                 ~115  (3.1.11)
+Undermining (removal def.)   140   (3.1.7)  — Level 4, earlier than assumed
+Zwischenzug                   48   (3.1.12) — boosted bracket to 1200+
+Pawn promotion tactics         52   (3.4.4)  — new concept added
+```
+
+**Endgame exercises (Panchenko):**
+```
+Rook endings                 630   (#1 — Lucena/Philidor/Rook vs pawns)
+Pawn endings                 300   (#2 — opposition, key squares, races)
+Bishop endings               221   (#3 — same/opp color)
+Knight endings               ~180  (#4)
+Bishop vs knight             253   (more important than assumed — boosted)
+Queen endings                ~120
+```
+
+**Opening-Middlegame plans (Kalinin):**
+```
+Sicilian structures          105   (4.5.x, 5.2.2) — most exercises
+King's Indian plans           58   (4.5.10 mobile center)
+Caro-Kann / Karlsbad          48   (4.5.8)
+Dutch / Hedgehog              44   (4.5.9)
+Ruy Lopez plans               38   (5.2.1)
+```
+
+---
+
+### Key Findings and System Calibration Changes
+
+**1. Rook endings are the #1 endgame priority (630 exercises)**
+`effectiveness_score` boosted to 0.92 for Lucena, Philidor, and rook endings general.
+`elo_bracket_min` corrected to 1600 (not 1400). Study prescription should prioritise
+rook endings above all other endgame topics for players 1600–2400.
+
+**2. Undermining (3.1.7) appears at Level 4 (1000–1200)**
+Previously modeled as a 1400+ pattern. 140 exercises at 1000–1200 means this is
+a core intermediate skill. `pattern_detector.py` attribution weight raised from 0.80 → 0.85.
+`concept_study_mapping` effectiveness bumped to 0.87 at 1000–1200.
+
+**3. Destruction of pawn shelter (3.1.15 — new concept)**
+138 exercises, Level 5–6 (1200–2400). This is the tactical equivalent of 4.4.2
+(pawn shield integrity). Added as new concept `3.1.15`. Weighted 0.88 =
+same as deflection. NOT yet detected by pattern_detector.py (Layer 2 — requires
+recognising forced pawn capture sequences near the king). TODO: add to Layer 2.
+
+**4. Bishop vs knight (6.3.1) — 253 exercises, more important than assumed**
+`effectiveness_score` boosted from 0.80 → 0.85 in the 2200–2400 bracket.
+
+---
+
+### New Concepts Added (May 2026)
+
+The following concepts were added to the `concepts` table from this curriculum
+analysis. They are NOT yet detected by `pattern_detector.py` (Layer 2/3):
+
+| Code    | Name                        | Source      | Notes |
+|---------|-----------------------------|-------------|-------|
+| 3.1.15  | Destruction of pawn shelter | CT-ART 4.0  | 138 ex, add to Layer 2 |
+| 3.4.4   | Pawn promotion tactics      | CT-ART 4.0  | 52 ex |
+| 3.4.5   | Trapping and encirclement   | CT-ART 4.0  | board geometry |
+| 3.4.6   | Stalemate trap              | CT-ART 4.0  | defensive resource |
+| 3.4.7   | Opening of a file           | CT-ART 4.0  | tactical pawn sac |
+| 3.4.8   | Pursuit                     | CT-ART 4.0  | chasing pieces |
+| 3.4.9   | Combination of methods      | CT-ART 4.0  | multi-tactic |
+| 4.5.8   | Karlsbad pawn structure     | Kalinin     | minority attack plan |
+| 4.5.9   | Hedgehog formation          | Kalinin     | elastic defense |
+| 4.5.10  | Mobile center               | Kalinin     | central pawn advance |
+
+---
+
+### concept_study_mapping Summary
+
+77 rows seeded (May 2026) covering:
+- Tactics: Level 2–10 (0–2400 Elo)
+- Endgames: Level 3–10 (1000–2400 Elo), rook endings prioritised
+- Positional: Level 5–8 (1200–2000 Elo)
+- Openings: Level 2–10 (600–2400 Elo)
+- Psychological: Time pressure + tilt (200–2400 Elo)
+
+Source data extracted from Chess King University product interfaces, May 2026.
+Not all concept codes have mappings yet — the 176-concept ontology is broader
+than any single curriculum. Missing mappings default to no study prescription
+until manually added or ML-derived from player data.
+
+---
+
+*Last updated: May 10, 2026*
 *Session context: Full project conversation captured.*
-*Next action: Test latest analyze_games.py with test run, validate accuracy numbers.*
-*Then: Move to Claude Code + GitHub for all future development.*
+*Next action: Full parallel analysis run completing. Run recalc_chesscom_accuracy.py + pattern_detector.py after.*
+*Then: Build weakness_graph aggregator, study module prescriptions.*

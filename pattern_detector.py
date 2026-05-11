@@ -147,7 +147,7 @@ def detect_removal_of_defender(board, bm, pc_str):
         if p and p.color == opp and p.piece_type != chess.KING:
             if b.is_attacked_by(pc, sq) and not b.is_attacked_by(opp, sq):
                 if board.is_attacked_by(opp, sq):   # was defended before capture
-                    return [('3.1.7', 0.80, None, 'mathematical')]
+                    return [('3.1.7', 0.85, None, 'mathematical')]
     return []
 
 

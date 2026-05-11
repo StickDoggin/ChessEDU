@@ -1969,6 +1969,39 @@ Don't do 20 fork puzzles then 20 pin puzzles.
 Do: fork, pin, back-rank, fork, endgame, pin (interleaved).
 Research shows interleaved practice is harder but produces better retention.
 
+### Hint Ladder — "Shut Up and Calculate" Pedagogy
+
+When showing a player their own game positions as drills, never give away the
+answer immediately. Use a hint ladder — the player earns the answer by
+calculating, not by being shown it.
+
+| Level | What the player sees | XP cost |
+|-------|---------------------|---------|
+| 0 | Position shown, clock running → "Find the best move" | 0 (full XP) |
+| 1 | "There is a tactical opportunity in this position" | −10% XP |
+| 2 | Theme revealed → "Look for a [fork / pin / deflection]" | −30% XP |
+| 3 | Piece identified → "Your knight on f5 can create threats" | −60% XP |
+| 4 | Full solution shown | −100% XP (0 XP) |
+
+The default session uses Level 0–1. Levels 2–4 are genuine rescue for stuck players.
+
+**Theoretical basis:** The goal of tactical training is to make patterns
+**pre-conscious** — recognized instantly without deliberate calculation, the same
+way a reader sees a word without sounding out letters. A grandmaster doesn't
+calculate a fork — they SEE it. This perceptual automaticity is built through
+thousands of repetitions.
+
+- Level 0–1 drills train both pattern recognition AND calculation.
+- Level 2 (theme revealed) trains pattern recognition only.
+- Hints at Level 0–1 produce the deepest learning because the player must
+  search the entire pattern space.
+
+This is "desirable difficulty": the harder retrieval attempt, when successful,
+encodes the pattern more durably. Never short-circuit that process.
+
+**Prescription language:** Frame drill goals as "Train your eye to see X,"
+not "Practice calculating X." The goal is perceptual, not computational.
+
 ---
 
 ## 17. AI Opponent System
@@ -2640,6 +2673,41 @@ A blunder from a completely lost position should not score 100% accuracy.
 Games with fewer than MIN_GAME_MOVES (10) moves are skipped.
 These are abandoned games, disconnects, or pre-arranged games.
 They pollute accuracy statistics and opening analysis.
+
+### 11. Pattern Recognition vs Calculation — Tactical Mistakes Have Two Causes
+
+Almost every tactical failure can be labeled "3.3.6 Calculation depth failure"
+but this is often the **wrong diagnosis**. Two fundamentally different causes:
+
+**Cause A — Calculation Failure:** Player saw the pattern existed but couldn't
+calculate deeply enough to confirm it worked. The motif was recognized; the
+tree search failed. Fix: calculation training, deeper tree-search exercises.
+
+**Cause B — Pattern Recognition Failure:** Player never saw the pattern at all.
+The motif was invisible — they didn't know to look for it. Fix: pattern drilling
+until the motif becomes pre-conscious.
+
+The goal of tactical training is NOT to make players calculate faster. It is to
+make patterns **pre-conscious** — recognized instantly without deliberate
+calculation. A grandmaster doesn't calculate a fork — they SEE it.
+
+**System implications:**
+
+- 3.3.6 (Calculation depth) must NOT be the primary prescription when a
+  specific pattern (fork, pin, back-rank, etc.) is identifiable. The motif IS
+  the primary cause. Calculation training is secondary — it only helps after
+  the player can see the pattern at all.
+
+- `pattern_detector.py` enforces this: when any motif in `_SPECIFIC_TACTICAL`
+  fires alongside 3.3.6, the 3.3.6 weight is capped at 0.40, ensuring it is
+  never selected as primary cause when a concrete motif is present.
+
+- 3.4.2 (Quiet move missed) remains secondary: quiet moves genuinely require
+  calculation even after pattern recognition, so no demotion applies.
+
+- Drill repetition builds **pattern libraries**, and pattern libraries
+  **replace** calculation. This is the entire theoretical basis of tactical
+  training at sub-GM levels.
 
 ---
 

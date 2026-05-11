@@ -679,6 +679,13 @@ def detect_psychological(row):
 # MAIN DETECTOR DISPATCH
 # ══════════════════════════════════════════════════════════════════════════════
 
+_SPECIFIC_TACTICAL = {
+    '3.1.1', '3.1.2', '3.1.3', '3.1.4', '3.1.5', '3.1.6',
+    '3.1.7', '3.1.8', '3.1.9', '3.1.10', '3.1.11', '3.1.12',
+    '3.1.13', '3.1.14', '3.1.15', '3.2.1', '3.2.2', '3.3.3',
+}
+
+
 def detect_all(row):
     """Run every Layer 1 detector for one move row. Returns deduplicated list."""
     try:
@@ -732,6 +739,15 @@ def detect_all(row):
     for code, weight, cpl_attr, method in patterns:
         if code not in by_code or weight > by_code[code][0]:
             by_code[code] = (weight, cpl_attr, method)
+
+    # Demote 3.3.6 (Calculation depth) to secondary when a specific tactical
+    # motif is identified. The motif IS the diagnosis; calculation training is
+    # only prescribed after the player can see the pattern at all.
+    if '3.3.6' in by_code:
+        if any(c in _SPECIFIC_TACTICAL for c in by_code if c != '3.3.6'):
+            w, ca, m = by_code['3.3.6']
+            by_code['3.3.6'] = (min(w, 0.40), ca, m)
+
     return [(code, w, ca, m) for code, (w, ca, m) in by_code.items()]
 
 

@@ -2516,6 +2516,25 @@ Currently opponent_capitalized is NULL for all moves.
 Second pass needed: after flagging player mistakes, analyze opponent's
 next 5 moves to see if they found the punishing continuation.
 
+**Issue 9: accuracy_chesscom values from May 2026 full analysis run are incorrect**
+Status: KNOWN — run `recalc_chesscom_accuracy.py` after full analysis completes.
+Root cause: The circular conversion bug (wdl_to_cp → win_prob_from_cp = identity)
+was fixed in analyze_games.py AFTER the full 10,921-game run started (May 2026).
+All games analyzed during that run have accuracy_chesscom ≈ accuracy_wdl because
+the old formula was a mathematical no-op.
+Fix: Run `python recalc_chesscom_accuracy.py` after the full run completes.
+This recomputes accuracy_chesscom from eval_before/eval_after using the correct
+CP-based formula. No Stockfish re-run needed.
+Do NOT run this during active analysis — wait until the run finishes.
+
+**Issue 10: CPL uncapped for ~100 moves from mate-score edge cases**
+Status: FIXED. Cleaned up May 2026.
+Root cause: When best_cp = mate score (9999) and eval_after = opposing mate score
+(-9999), cpl_raw = ~20000 before the min() cap fires. The cap was present but
+the inputs were not pre-clamped. 100 rows had CPL 500-10565.
+Fix: Pre-clamp both eval inputs to [-1000, +1000] before subtraction.
+Cleanup: `UPDATE moves SET centipawn_loss = 500 WHERE centipawn_loss > 500` — fixed.
+
 ### Data Status
 ```
 Database:       chess_engine on PostgreSQL 18.3
@@ -2735,6 +2754,38 @@ Potential detection: games where result_type = 'resigned' AND total_moves < 15.
 If you deviate from theory on move 8 because you forgot the line → preparation gap.
 If you deviate from theory on move 8 because the opponent played an unusual move → different.
 The novelty_move data helps here but we need more nuanced detection.
+
+### 3.4.2 Quiet Move Recognition — Subtype Split (Roadmap)
+
+3.4.2 fires at 10.78/100 weighted moves and is the #1 weakness by frequency.
+However it conflates two fundamentally different failure types:
+
+**Type A — Quiet first move of a tactical combination (44% of fires)**
+- The best move is quiet but sets up a forced tactical sequence
+- Player missed it because they didn't see the downstream tactic
+- Prescription: train the underlying tactic (fork, pin, deflection, etc.)
+- These resolve as the tactical pattern library improves
+- Example: Rd1! (quiet rook move) that sets up a back-rank mate threat
+
+**Type B — Genuinely quiet positional move (56% of fires)**
+- The best move is quiet AND there is no downstream tactical pattern
+- Player missed it due to lack of positional vision or candidate generation
+- Prescription: positional calculation training, prophylaxis drills,
+  candidate move generation exercises
+- These are harder to resolve — represent the true 1600→1800 skill boundary
+- Example: h3! (prophylactic pawn move) that prevents a future attack
+
+**Implementation plan for Layer 2 of pattern_detector.py:**
+When a specific tactical motif fires alongside 3.4.2 on the same move,
+demote 3.4.2 to secondary — the tactical motif IS the primary cause.
+This mirrors the existing 3.3.6 demotion in `_SPECIFIC_TACTICAL`.
+Add 3.4.2 to the same demotion logic: when `_SPECIFIC_TACTICAL` motifs
+are present, cap 3.4.2's weight at 0.40 as well.
+This will re-classify ~44% of 3.4.2 primary fires as secondary, producing
+a cleaner signal for the genuinely quiet positional failures.
+
+Note: This change should only be applied AFTER the full analysis run
+completes, then re-run pattern_detector.py on all games.
 
 ### Open Technical Questions
 

@@ -6,6 +6,12 @@ Run after analysis completes (or incrementally as games finish).
 
 Layer 2 (TODO): Prophylaxis failure (3.4.5) — needs 3-5 move lookahead window.
 Layer 2 (TODO): Plan inconsistency — needs move-direction categorization across windows.
+Layer 2 (TODO): 3.4.2 subtype split — when _SPECIFIC_TACTICAL motif fires alongside
+    3.4.2, demote 3.4.2 to secondary (weight capped at 0.40) just like 3.3.6.
+    Type A (quiet tactical setup) → tactical motif is primary, 3.4.2 secondary.
+    Type B (genuine quiet positional) → 3.4.2 remains primary.
+    44% of 3.4.2 fires are Type A; this re-classification cleans the signal.
+    Apply after full analysis run completes, then re-run pattern_detector.py.
 Layer 3 (TODO): Tilt detection (7.3.1) — needs session grouping across games.
 Layer 3 (TODO): Rating anxiety (7.3.2) — needs cross-game opponent-elo aggregation.
 Layer 3 (TODO): Opening prep gap (7.1.1) — needs time vs phase baseline comparison.

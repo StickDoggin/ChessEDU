@@ -1,6 +1,5 @@
 stockfish/stockfish-windows-x86-64-avx2.exe
 books/
-syzygy/
 venv/
 .env
 __pycache__/

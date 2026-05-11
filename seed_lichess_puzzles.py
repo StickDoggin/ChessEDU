@@ -143,11 +143,10 @@ def ensure_columns(cur):
             ALTER TABLE drill_positions
             ADD COLUMN IF NOT EXISTS {col} {coltype}
         """)
-    # Unique index so re-runs are idempotent
+    # Full unique index (non-partial) required for ON CONFLICT to work
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_drill_lichess_puzzle_id
         ON drill_positions (lichess_puzzle_id)
-        WHERE lichess_puzzle_id IS NOT NULL
     """)
 
 

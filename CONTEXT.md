@@ -1304,21 +1304,55 @@ def accuracy_chesscom(wins_before, draws_before, losses_before,
 - More forgiving than Lichess model
 - Users recognize this scale from their Chess.com experience
 
-### Model 4: Maia Chess (future)
-Maia is a neural network trained to predict human moves at specific Elo brackets.
-Open source: https://github.com/CSSLab/maia-chess
-9 models: one per 200-Elo bracket (1100, 1300, 1500, 1700, 1900, etc.)
-At 1650, use the 1700 model.
+### Model 4: Maia-2 (IMPLEMENTED — maia_pass.py)
+Maia-2 is a unified neural network trained to predict human moves across all skill levels
+simultaneously (NeurIPS 2024, University of Toronto CSSLab).
+pip: `pip install maia2`
+Models: rapid (~280MB) and blitz (~280MB), downloaded on first run to ./maia2_models/.
 
 **What makes it unique:**
 Instead of "how far from perfect was this move?"
-Maia asks "how human-like was this move at your rating level?"
+Maia-2 asks "how human-like was this move at YOUR exact rating?"
 
-A move that's -50 CPL but played by 80% of 1600-rated humans → good move for your level.
-A move that's -30 CPL but played by 2% of humans → suspicious/lucky move.
+- Takes `elo_self` and `elo_oppo` as raw integers
+- Returns `move_probs` (dict of UCI->probability, sorted desc) and `win_prob` (0-1 from player's perspective)
+- Human win probability: more honest than engine eval for practical play
 
-Requires PyTorch. Will add when PyTorch is installed for our own ML models.
-Adds: accuracy_maia column to moves and games tables.
+**Fields written to moves table:**
+- `maia_probability`  — P(player_move | position, elo_self, elo_oppo)
+- `maia_top_move_uci` — Maia's most-likely move in this position/rating context
+- `maia_agreement`    — True if player chose Maia's top move
+- `maia_bracket_rank` — Rank of player's move in Maia's distribution (1 = most likely)
+- `maia_win_prob`     — Human win probability at player's Elo, from player's perspective
+- `weakness_type`     — 'personal' | 'bracket' | NULL
+
+**weakness_type classification:**
+```
+CPL < 150                    → NULL   (not a significant mistake)
+CPL >= 150 + maia_prob < 15% → personal  (you miss this; others at your Elo find it → HIGH priority drill)
+CPL >= 150 + maia_prob >= 15% → bracket  (everyone at your Elo misses this → lower priority)
+```
+This distinction is critical for prescription priority: personal weaknesses are actionable;
+bracket weaknesses are normal and expected for the skill level.
+
+**games table:**
+- `avg_maia_win_prob` — AVG(maia_win_prob) for all player moves in the game
+
+**Model selection:**
+- rapid / classical / unknown → rapid_model
+- blitz / bullet → blitz_model
+
+**Usage:**
+```
+python maia_pass.py               # process all unprocessed player moves
+python maia_pass.py --limit 10   # test mode: first 10 games
+python maia_pass.py --player 1   # restrict to player_id=1
+python maia_pass.py --sample     # show sample results from DB
+```
+
+**References:**
+- Maia-2 GitHub: https://github.com/CSSLab/maia2
+- Maia-3 (announced, not yet released): will support multi-move context and multi-agent rating
 
 ---
 
@@ -2007,9 +2041,16 @@ not "Practice calculating X." The goal is perceptual, not computational.
 ## 17. AI Opponent System
 
 ### Overview
-A Stockfish-powered opponent that plays at a calibrated Elo level
-but is weighted to steer games toward positions exposing the player's weaknesses.
+A Maia-2-powered opponent that plays human-like moves at the player's exact Elo level,
+weighted to steer games toward positions exposing the player's weaknesses.
 No existing tool does this. Chessiverse has human-like bots but they're generic.
+
+**Why Maia-2 over Stockfish skill-level simulation:**
+Stockfish at lower skill levels plays randomly bad moves — not human-like bad moves.
+Maia-2 plays the moves actual humans at that Elo play, including their specific error patterns.
+This makes practice games feel real and creates positions where the player's weaknesses
+actually arise (because Maia-2 produces the same board situations humans produce).
+Inputs: `elo_self` (Maia's Elo) + `elo_oppo` (player's Elo) for full two-sided context.
 
 ### Three Opponent Modes
 

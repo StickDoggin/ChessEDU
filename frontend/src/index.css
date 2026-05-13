@@ -148,7 +148,12 @@ button:disabled, .btn:disabled { opacity: 0.4; cursor: default; }
 .board-wrap { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 .board-col  { flex: 0 0 auto; }
 
-cg-board { background: #312e2b; }
+/* Use background-color (longhand), NOT background shorthand — shorthand resets
+   background-image and would wipe out chessground.brown.css's SVG checker pattern. */
+cg-wrap { display: block; }
+cg-board { background-color: #f0d9b5; }
+cg-board square.light { background-color: #f0d9b5; }
+cg-board square.dark  { background-color: #b58863; }
 .cg-wrap  { width: 400px; height: 400px; }
 
 /* ── Drill interface ──────────────────────────────────────── */

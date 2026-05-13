@@ -160,7 +160,8 @@ export default function DrillBoard() {
       <div className="board-wrap">
         {/* Chess board */}
         <div className="board-col">
-          <div className="cg-wrap" ref={boardRef} />
+          <div className="cg-wrap" ref={boardRef}
+               style={{ width: '400px', height: '400px', position: 'relative' }} />
           {current?.visualization_mode && (
             <div className="alert alert-blue" style={{ marginTop: 10, fontSize: 11 }}>
               Visualization mode — this is a deep tactical sequence (rated {current.puzzle_rating}+). Try to calculate the full line before moving.

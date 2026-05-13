@@ -78,33 +78,46 @@ def get_drill_session(
         depth_clause = "AND (dp.puzzle_rating BETWEEN %s AND %s OR dp.puzzle_rating IS NULL OR dp.concept_code <> '3.3.6.c')"
         depth_args = (rating_lo, rating_hi)
 
-    if codes:
-        cur.execute(f"""
+    limit = length_mins * 3
+
+    # When no concept codes given, pull top weakness codes so we can filter
+    # the 5.44M-row Lichess pool down to a manageable subset.
+    if not codes:
+        cur.execute("""
+            SELECT concept_code FROM weakness_graph
+            WHERE player_id = %s AND status IN ('active', 'improving')
+            ORDER BY COALESCE(study_efficiency, 0) DESC
+            LIMIT 5
+        """, (player_id,))
+        codes = [r[0] for r in cur.fetchall()]
+
+    # player_id filter: player's own positions (player_id=N) OR Lichess pool (player_id IS NULL).
+    # Two-step for variety: use the partial index to quickly fetch a 500-row candidate pool
+    # by concept_code + next_review, then randomise that smaller set.
+    cur.execute(f"""
+        SELECT id, concept_code, name, fen, correct_move, correct_move_san,
+               difficulty, next_review, review_count, source_move_id,
+               solution_depth, puzzle_rating
+        FROM (
             SELECT dp.id, dp.concept_code, c.name, dp.fen,
                    dp.correct_move, dp.correct_move_san, dp.difficulty,
                    dp.next_review, dp.review_count, dp.source_move_id,
-                   dp.solution_depth, dp.puzzle_rating
+                   dp.solution_depth, dp.puzzle_rating,
+                   (dp.player_id IS NULL) AS is_lichess
             FROM drill_positions dp
             JOIN concepts c ON c.code = dp.concept_code
-            WHERE dp.player_id = %s
+            WHERE (dp.player_id = %s OR dp.player_id IS NULL)
               AND dp.concept_code = ANY(%s)
               AND dp.next_review <= %s
               {depth_clause}
-            ORDER BY dp.next_review ASC, dp.difficulty DESC
-            LIMIT %s
-        """, (player_id, codes, date.today()) + depth_args + (length_mins * 3,))
-    else:
-        cur.execute("""
-            SELECT dp.id, dp.concept_code, c.name, dp.fen,
-                   dp.correct_move, dp.correct_move_san, dp.difficulty,
-                   dp.next_review, dp.review_count, dp.source_move_id,
-                   dp.solution_depth, dp.puzzle_rating
-            FROM drill_positions dp
-            JOIN concepts c ON c.code = dp.concept_code
-            WHERE dp.player_id = %s AND dp.next_review <= %s
-            ORDER BY dp.next_review ASC, dp.difficulty DESC
-            LIMIT %s
-        """, (player_id, date.today(), length_mins * 3))
+            ORDER BY (dp.player_id IS NULL) ASC,  -- own positions first
+                     dp.next_review ASC,
+                     dp.id ASC                    -- stable, uses index; randomised below
+            LIMIT 500
+        ) pool
+        ORDER BY is_lichess ASC, RANDOM()         -- randomise within Lichess pool only
+        LIMIT %s
+    """, (player_id, codes, date.today()) + depth_args + (limit,))
 
     rows = cur.fetchall()
     cur.close()

@@ -352,6 +352,153 @@ def detect_quiet_move_missed(board, bm, pc_str, cpl):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# LAYER 2 — SUBTYPE DETECTORS (3.3.6 and 3.4.2 subcategories)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _pv_first_n_moves(board, pv_line, n):
+    """Walk first n moves of pv_line, return list of {is_capture, is_check} per move."""
+    moves = []
+    if not pv_line:
+        return moves
+    b = board.copy()
+    for uci in pv_line.split()[:n]:
+        try:
+            m = chess.Move.from_uci(uci)
+            if m not in b.legal_moves:
+                break
+            is_cap = b.is_capture(m)
+            b.push(m)
+            moves.append({'is_capture': is_cap, 'is_check': b.is_check()})
+        except Exception:
+            break
+    return moves
+
+
+def _count_opp_threats(board, pc_color):
+    """Count undefended player pieces currently attacked by opponent."""
+    opp = not pc_color
+    count = 0
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        if p and p.color == pc_color and p.piece_type != chess.KING:
+            if board.is_attacked_by(opp, sq) and not board.is_attacked_by(pc_color, sq):
+                count += 1
+    return count
+
+
+def detect_subtypes(row, board, bm, pv_line_1):
+    """
+    Layer 2: detect 3.3.6.a-d (calculation subtypes) and 3.4.2.a-f (quiet-move subtypes).
+    Call after detect_all gathers the base 3.3.6 / 3.4.2 signals.
+    """
+    results = []
+    cpl     = row.get('centipawn_loss') or 0
+    pv_len  = len(pv_line_1.split()) if pv_line_1 else 0
+    pc      = _cc(row['color'])
+
+    # ── 3.3.6 SUBTYPES ───────────────────────────────────────────────────────
+    if cpl >= 30:
+        pv_moves = _pv_first_n_moves(board, pv_line_1, 5)
+
+        # 3.3.6.a: short forcing sequence (≤3 ply) with captures
+        if pv_len <= 3 and any(m['is_capture'] for m in pv_moves[:3]):
+            results.append(('3.3.6.a', 0.85, None, 'mathematical'))
+
+        # 3.3.6.b: quiet first PV move → forcing second move
+        if pv_len >= 3 and len(pv_moves) >= 2:
+            first, second = pv_moves[0], pv_moves[1]
+            if (not first['is_capture'] and not first['is_check']
+                    and (second['is_capture'] or second['is_check'])):
+                results.append(('3.3.6.b', 0.80, None, 'mathematical'))
+
+        # 3.3.6.c: deep tactical sequence (5+ ply)
+        if pv_len >= 5:
+            results.append(('3.3.6.c', 0.85, None, 'mathematical'))
+
+        # 3.3.6.d: defensive calculation — losing and missed a save
+        eval_before = row.get('eval_before') or 0
+        if row.get('resignation_mindset_flag') or (eval_before <= -200 and cpl >= 100):
+            results.append(('3.3.6.d', 0.80, None, 'mathematical'))
+
+    # ── 3.4.2 SUBTYPES (only when best move is quiet) ─────────────────────────
+    if cpl >= 50:
+        try:
+            b_bm = board.copy()
+            b_bm.push(bm)
+            is_quiet_bm = not board.is_capture(bm) and not b_bm.is_check()
+        except Exception:
+            is_quiet_bm = False
+
+        if is_quiet_bm:
+            bm_piece = board.piece_at(bm.from_square)
+
+            # 3.4.2.a: prophylactic — best_move reduces undefended threats
+            threats_before = _count_opp_threats(board, pc)
+            if threats_before > 0:
+                try:
+                    b_after = board.copy()
+                    b_after.push(bm)
+                    if _count_opp_threats(b_after, pc) < threats_before:
+                        results.append(('3.4.2.a', 0.80, None, 'mathematical'))
+                except Exception:
+                    pass
+
+            # 3.4.2.b: piece improvement / centralization (non-pawn, non-king)
+            if bm_piece and bm_piece.piece_type not in (chess.PAWN, chess.KING):
+                mob_before = len(list(board.attacks(bm.from_square)))
+                try:
+                    b_after = board.copy()
+                    b_after.push(bm)
+                    mob_after = len(list(b_after.attacks(bm.to_square)))
+                    pv_forcing = any(m['is_capture'] or m['is_check']
+                                     for m in _pv_first_n_moves(board, pv_line_1, 4))
+                    if mob_after - mob_before >= 2 and not pv_forcing:
+                        results.append(('3.4.2.b', 0.70, None, 'positional'))
+                except Exception:
+                    pass
+
+            # 3.4.2.c: quiet setup → forcing follow-up (Type A combination)
+            pv2 = _pv_first_n_moves(board, pv_line_1, 2)
+            if len(pv2) >= 2 and (pv2[1]['is_capture'] or pv2[1]['is_check']):
+                results.append(('3.4.2.c', 0.85, None, 'mathematical'))
+
+            # 3.4.2.d: pawn break / structure — pawn move opening a file
+            if bm_piece and bm_piece.piece_type == chess.PAWN:
+                file = chess.square_file(bm.to_square)
+                try:
+                    b_after = board.copy()
+                    b_after.push(bm)
+                    no_friendly_pawn = not any(
+                        b_after.piece_at(chess.square(file, r)) and
+                        b_after.piece_at(chess.square(file, r)).color == pc and
+                        b_after.piece_at(chess.square(file, r)).piece_type == chess.PAWN
+                        for r in range(8)
+                    )
+                    if no_friendly_pawn:
+                        results.append(('3.4.2.d', 0.70, None, 'positional'))
+                except Exception:
+                    pass
+
+            # 3.4.2.e: king safety quiet move (middlegame)
+            if row.get('phase') == 'middlegame' and bm_piece:
+                king_sq = board.king(pc)
+                is_king_move = bm_piece.piece_type == chess.KING
+                is_luft = (
+                    bm_piece.piece_type == chess.PAWN and king_sq is not None
+                    and abs(chess.square_file(bm.from_square) - chess.square_file(king_sq)) <= 1
+                )
+                if is_king_move or is_luft:
+                    results.append(('3.4.2.e', 0.75, None, 'positional'))
+
+            # 3.4.2.f: zugzwang / tempo (endgame, low tension)
+            position_tension = row.get('position_tension') or 1.0
+            if row.get('phase') == 'endgame' and position_tension < 0.3:
+                results.append(('3.4.2.f', 0.70, None, 'positional'))
+
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # POSITIONAL DETECTORS (analyse what played_move DAMAGES vs best_move)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -737,7 +884,8 @@ def detect_all(row):
         detect_weak_square(board, pm, pc) +
         detect_pawn_shield_weakened(board, pm, pc) +
         detect_open_file_toward_king(board, pm, pc) +
-        detect_psychological(row)
+        detect_psychological(row) +
+        detect_subtypes(row, board, bm, pv)
     )
 
     # Deduplicate by code — keep highest weight
@@ -746,13 +894,16 @@ def detect_all(row):
         if code not in by_code or weight > by_code[code][0]:
             by_code[code] = (weight, cpl_attr, method)
 
-    # Demote 3.3.6 (Calculation depth) to secondary when a specific tactical
-    # motif is identified. The motif IS the diagnosis; calculation training is
-    # only prescribed after the player can see the pattern at all.
+    # Demote 3.3.6 to secondary when a specific tactical motif is identified
     if '3.3.6' in by_code:
         if any(c in _SPECIFIC_TACTICAL for c in by_code if c != '3.3.6'):
             w, ca, m = by_code['3.3.6']
             by_code['3.3.6'] = (min(w, 0.40), ca, m)
+
+    # Demote 3.4.2 to secondary when Type A (quiet tactical setup 3.4.2.c) fires
+    if '3.4.2' in by_code and '3.4.2.c' in by_code:
+        w, ca, m = by_code['3.4.2']
+        by_code['3.4.2'] = (min(w, 0.40), ca, m)
 
     return [(code, w, ca, m) for code, (w, ca, m) in by_code.items()]
 
@@ -775,7 +926,8 @@ def _fetch_moves(cur, game_ids):
             m.phase, m.color, m.pv_line_1,
             m.is_time_pressure_error, m.is_likely_premove,
             m.resignation_mindset_flag, m.complacency_flag,
-            m.desperation_sacrifice, m.swindle_attempt
+            m.desperation_sacrifice, m.swindle_attempt,
+            m.position_tension
         FROM moves m
         WHERE m.game_id IN ({ph})
           AND m.mistake_class IS NOT NULL
@@ -912,6 +1064,161 @@ def run(game_ids=None):
     print()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SUBTYPE SEED DATA
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SUBTYPE_CONCEPTS = [
+    ('3.3.6.a', '3.3.6', 'Forcing sequence missed (2-3 ply)', 'tactics',
+     'Missed a short capture/recapture sequence requiring 2-3 ply'),
+    ('3.3.6.b', '3.3.6', 'Quiet setup for forcing sequence (3-5 ply)', 'tactics',
+     'Best move is quiet but PV line becomes forcing immediately after'),
+    ('3.3.6.c', '3.3.6', 'Deep tactical sequence (5-7 ply)', 'tactics',
+     'Requires seeing 3+ moves ahead with multiple branches'),
+    ('3.3.6.d', '3.3.6', 'Defensive calculation', 'tactics',
+     'Player was losing; missed a saving resource'),
+    ('3.4.2.a', '3.4.2', 'Prophylactic quiet move', 'positional',
+     'Best move prevents opponent threat before it materializes'),
+    ('3.4.2.b', '3.4.2', 'Piece improvement / centralization', 'positional',
+     'Repositions piece to better square with no immediate tactical trigger'),
+    ('3.4.2.c', '3.4.2', 'Quiet first move of combination', 'tactics',
+     'Quiet now, creates forcing threat on move 2+ (Type A)'),
+    ('3.4.2.d', '3.4.2', 'Pawn break / structure', 'positional',
+     'Pawn advance that opens a file or changes pawn structure'),
+    ('3.4.2.e', '3.4.2', 'King safety quiet move', 'positional',
+     'Tucks king or creates escape square'),
+    ('3.4.2.f', '3.4.2', 'Zugzwang / tempo', 'endgame',
+     'Passes positional burden to opponent'),
+]
+
+_SUBTYPE_STUDY_MAPPINGS = [
+    ('3.3.6.a', 'tactical_drill',   'short_forcing_sequence',    800,  1600),
+    ('3.3.6.b', 'tactical_drill',   'quiet_setup_combination',  1200,  2000),
+    ('3.3.6.c', 'tactical_drill',   'deep_calculation',         1400,  2400),
+    ('3.3.6.d', 'psychological',    'defensive_resourcefulness', 1000,  2400),
+    ('3.4.2.a', 'tactical_drill',   'prophylaxis',              1200,  2400),
+    ('3.4.2.b', 'positional_drill', 'piece_improvement',        1000,  2400),
+    ('3.4.2.c', 'tactical_drill',   'quiet_tactic_setup',       1200,  2400),
+    ('3.4.2.d', 'positional_drill', 'pawn_breaks',              1200,  2400),
+    ('3.4.2.e', 'positional_drill', 'king_safety_proactive',    1000,  2400),
+    ('3.4.2.f', 'endgame_drill',    'zugzwang_tempo',           1400,  2400),
+]
+
+
+def _seed_subtype_concepts(cur):
+    """Insert 3.3.6.a-d and 3.4.2.a-f into concepts and concept_study_mapping."""
+    for code, parent, name, cat, desc in _SUBTYPE_CONCEPTS:
+        cur.execute("""
+            INSERT INTO concepts (code, parent_code, name, category, description)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (code) DO NOTHING
+        """, (code, parent, name, cat, desc))
+    for code, module, subtype, elo_min, elo_max in _SUBTYPE_STUDY_MAPPINGS:
+        cur.execute("""
+            INSERT INTO concept_study_mapping
+                (concept_code, study_module, study_subtype, elo_bracket_min, elo_bracket_max)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (concept_code, study_module, study_subtype) DO NOTHING
+        """, (code, module, subtype, elo_min, elo_max))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TARGETED SUBTYPE PASS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_subtypes_pass(game_ids=None):
+    """
+    Targeted Layer 2 pass: detect subtypes for moves already tagged with 3.3.6 or 3.4.2.
+    Seeds new concept codes first. Safe to re-run (ON CONFLICT DO UPDATE).
+    """
+    conn = get_connection()
+    cur  = conn.cursor()
+
+    _seed_subtype_concepts(cur)
+    conn.commit()
+    print("Subtype concepts + study mappings seeded (10 new codes).")
+
+    concept_ids = _fetch_concept_ids(cur)
+
+    game_filter = "AND m.game_id = ANY(%s)" if game_ids else ""
+    game_args   = [game_ids] if game_ids else []
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            m.id, m.game_id, m.fen_before, m.uci, m.best_move_uci,
+            m.mistake_class, m.centipawn_loss, m.eval_before, m.eval_after,
+            m.phase, m.color, m.pv_line_1,
+            m.is_time_pressure_error, m.is_likely_premove,
+            m.resignation_mindset_flag, m.complacency_flag,
+            m.desperation_sacrifice, m.swindle_attempt,
+            m.position_tension
+        FROM moves m
+        JOIN move_concepts mc ON mc.move_id = m.id
+        JOIN concepts c       ON c.id = mc.concept_id
+        WHERE c.code IN ('3.3.6', '3.4.2')
+          {game_filter}
+        ORDER BY m.id
+    """, game_args)
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    print(f"Running subtypes on {len(rows):,} moves tagged 3.3.6 or 3.4.2...")
+
+    subtype_counts = {}
+    written = errors = 0
+
+    for row in rows:
+        try:
+            board = chess.Board(row['fen_before'])
+            bm    = chess.Move.from_uci(row['best_move_uci'])
+        except Exception:
+            errors += 1
+            continue
+        if bm not in board.legal_moves:
+            continue
+
+        subtypes = detect_subtypes(row, board, bm, row['pv_line_1'])
+        if subtypes:
+            written += _write_patterns(cur, row['id'], subtypes, concept_ids,
+                                       row['centipawn_loss'])
+            for code, *_ in subtypes:
+                subtype_counts[code] = subtype_counts.get(code, 0) + 1
+
+    conn.commit()
+
+    cur.execute("SELECT code, name FROM concepts "
+                "WHERE code LIKE '3.3.6.%' OR code LIKE '3.4.2.%'")
+    names = dict(cur.fetchall())
+    cur.close()
+    conn.close()
+
+    print()
+    print("=" * 65)
+    print("SUBTYPE DETECTION — SUMMARY")
+    print("=" * 65)
+    print(f"  Moves processed:      {len(rows):,}")
+    print(f"  Subtype tags written: {written:,}")
+    if errors:
+        print(f"  Errors skipped:       {errors}")
+    print()
+    print(f"  {'Code':<12} {'Name':<42} {'Count':>6}")
+    print("  " + "-" * 63)
+    for code in sorted(subtype_counts):
+        print(f"  {code:<12} {names.get(code, '?'):<42} {subtype_counts[code]:>6,}")
+    print()
+    return subtype_counts
+
+
 if __name__ == '__main__':
-    ids = [int(x) for x in sys.argv[1:]] if len(sys.argv) > 1 else None
-    run(ids)
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('game_ids', nargs='*', type=int)
+    ap.add_argument('--subtypes', action='store_true',
+                    help='Run targeted subtype pass only (fast)')
+    args = ap.parse_args()
+
+    ids = args.game_ids or None
+    if args.subtypes:
+        run_subtypes_pass(ids)
+    else:
+        run(ids)

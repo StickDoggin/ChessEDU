@@ -1,0 +1,173 @@
+"""Drill session and attempt endpoints."""
+from datetime import date
+from typing import Annotated
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+import psycopg
+from api.dependencies import get_db
+
+router = APIRouter(prefix="/players", tags=["drills"])
+Db = Annotated[psycopg.Connection, Depends(get_db)]
+
+
+class DrillPosition(BaseModel):
+    drill_id: int
+    concept_code: str
+    concept_name: str
+    fen: str
+    correct_move: str
+    correct_move_san: str | None
+    difficulty: float
+    next_review: str
+    review_count: int
+    source_game_id: int | None
+
+
+class DrillSession(BaseModel):
+    player_id: int
+    concept_codes: list[str]
+    positions: list[DrillPosition]
+    session_minutes: int
+
+
+class DrillAttemptRequest(BaseModel):
+    drill_id: int
+    was_correct: bool
+    time_spent_ms: int
+    move_played: str | None = None
+
+
+class DrillAttemptResponse(BaseModel):
+    drill_id: int
+    was_correct: bool
+    next_review_date: str
+    new_interval_days: int
+    new_ease_factor: float
+    mastery_score_delta: float
+
+
+@router.get("/{player_id}/drill-session", response_model=DrillSession)
+def get_drill_session(
+    player_id: int, db: Db,
+    concept_codes: str | None = None,
+    length_mins: int = 10,
+):
+    cur = db.cursor()
+
+    codes = [c.strip() for c in concept_codes.split(',')] if concept_codes else []
+
+    if codes:
+        cur.execute("""
+            SELECT dp.id, dp.concept_code, c.name, dp.fen,
+                   dp.correct_move, dp.correct_move_san, dp.difficulty,
+                   dp.next_review, dp.review_count, dp.source_move_id
+            FROM drill_positions dp
+            JOIN concepts c ON c.code = dp.concept_code
+            WHERE dp.player_id = %s
+              AND dp.concept_code = ANY(%s)
+              AND dp.next_review <= %s
+            ORDER BY dp.next_review ASC, dp.difficulty DESC
+            LIMIT %s
+        """, (player_id, codes, date.today(), length_mins * 3))
+    else:
+        cur.execute("""
+            SELECT dp.id, dp.concept_code, c.name, dp.fen,
+                   dp.correct_move, dp.correct_move_san, dp.difficulty,
+                   dp.next_review, dp.review_count, dp.source_move_id
+            FROM drill_positions dp
+            JOIN concepts c ON c.code = dp.concept_code
+            WHERE dp.player_id = %s AND dp.next_review <= %s
+            ORDER BY dp.next_review ASC, dp.difficulty DESC
+            LIMIT %s
+        """, (player_id, date.today(), length_mins * 3))
+
+    rows = cur.fetchall()
+    cur.close()
+
+    positions = [
+        DrillPosition(
+            drill_id=r[0], concept_code=r[1], concept_name=r[2],
+            fen=r[3], correct_move=r[4], correct_move_san=r[5],
+            difficulty=r[6] or 0.5, next_review=str(r[7]),
+            review_count=r[8] or 0, source_game_id=r[9]
+        ) for r in rows
+    ]
+
+    used_codes = list({p.concept_code for p in positions})
+    return DrillSession(
+        player_id=player_id, concept_codes=used_codes,
+        positions=positions, session_minutes=length_mins
+    )
+
+
+@router.post("/{player_id}/drill-attempt", response_model=DrillAttemptResponse)
+def record_drill_attempt(player_id: int, body: DrillAttemptRequest, db: Db):
+    cur = db.cursor()
+
+    cur.execute("""
+        SELECT ease_factor, interval_days, review_count, concept_code
+        FROM drill_positions WHERE id = %s AND player_id = %s
+    """, (body.drill_id, player_id))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Drill not found")
+
+    ease, interval, count, code = row
+    ease     = ease or 2.5
+    interval = interval or 1
+    count    = count or 0
+
+    # SM-2 update
+    if body.was_correct:
+        if count == 0:
+            new_interval = 1
+        elif count == 1:
+            new_interval = 6
+        else:
+            new_interval = round(interval * ease)
+        new_ease = max(1.3, ease + 0.1)
+    else:
+        new_interval = 1
+        new_ease = max(1.3, ease - 0.20)
+
+    from datetime import timedelta
+    next_review = date.today() + timedelta(days=new_interval)
+    last_result = 'correct' if body.was_correct else 'incorrect'
+
+    cur.execute("""
+        UPDATE drill_positions
+        SET ease_factor = %s, interval_days = %s,
+            next_review = %s, review_count = review_count + 1,
+            last_result = %s
+        WHERE id = %s
+    """, (new_ease, new_interval, next_review, last_result, body.drill_id))
+
+    cur.execute("""
+        INSERT INTO drill_attempts
+            (drill_id, player_id, move_played, was_correct,
+             time_spent_ms, new_interval, new_ease_factor)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (body.drill_id, player_id, body.move_played, body.was_correct,
+          body.time_spent_ms, new_interval, new_ease))
+
+    # Mastery delta preview (not persisted here — update_mastery.py does the full pass)
+    cur.execute("""
+        SELECT COALESCE(mastery_score, 0) FROM weakness_graph
+        WHERE player_id = %s AND concept_code = %s
+        LIMIT 1
+    """, (player_id, code))
+    mrow = cur.fetchone()
+    old_mastery = float(mrow[0]) if mrow else 0.0
+    mastery_delta = 0.10 if body.was_correct else -0.05
+
+    db.commit()
+    cur.close()
+
+    return DrillAttemptResponse(
+        drill_id=body.drill_id,
+        was_correct=body.was_correct,
+        next_review_date=str(next_review),
+        new_interval_days=new_interval,
+        new_ease_factor=round(new_ease, 2),
+        mastery_score_delta=mastery_delta,
+    )

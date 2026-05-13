@@ -2492,11 +2492,11 @@ gitignored — download with the PowerShell script in Section 26.
 
 ### What's Working
 - [x] PostgreSQL database with full schema (30+ tables)
-- [x] 176 chess concepts seeded
+- [x] 186 chess concepts seeded (176 original + 10 new subtypes: 3.3.6.a-d, 3.4.2.a-f)
 - [x] 10,921 games imported from Chess.com (StickDoggin)
 - [x] Current ratings fetched (rapid=1656, blitz=1632)
 - [x] Analysis queue populated with priority scores (10,921 games)
-- [x] **6,088/10,921 games analyzed (56% — full run in progress as of 2026-05-11)**
+- [x] **10,836 games analyzed (COMPLETE as of 2026-05-13)**
 - [x] Stockfish 18.3 installed and working
 - [x] Hybrid time/depth analysis system working
 - [x] Three accuracy models implemented (WDL=85–89%, Lichess=35–63%, Chess.com=85–89%)
@@ -2516,6 +2516,57 @@ gitignored — download with the PowerShell script in Section 26.
 - [x] Drill session engine: SM-2 spaced repetition, 70/30 own-game/Lichess mix
 - [x] Opening prep gap detector: recency-weighted, 90-day half-life, stale>180d filter
 - [x] opening_name/opening_var backfilled from ECOUrl for all 10,890 games (99.7%)
+- [x] **Maia-2 installed (pip install maia2); 189K+ moves processed, remainder running**
+- [x] maia_probability, maia_win_prob, weakness_type (personal/bracket) populated
+- [x] **Layer 2 subtype detection added: 3.3.6.a-d + 3.4.2.a-f (210,750 subtype tags)**
+- [x] 10 new concept_study_mapping entries with Elo brackets for each subtype
+- [x] **Mastery tracking loop: update_mastery.py (drill performance → mastery_score)**
+- [x] weakness_aggregator.py shows mastery_score % next to every weakness entry
+- [x] **FastAPI layer started: api/ directory, /health + /players/1/profile tested**
+- [x] GPU check (2026-05-13): No CUDA available — Maia runs CPU-only on this machine
+
+### GPU Status
+CUDA: NOT available on this machine (CPU-only).
+Maia-2 runs on CPU at full speed. When deploying to cloud GPU VM, update maia_pass.py
+to pass `device='cuda'` to `model.from_pretrained()`.
+
+### Maia-2 Status (as of 2026-05-13)
+- Models downloaded: rapid (~280MB) + blitz (~280MB) in ./maia2_models/
+- Moves processed: 189,000+ (full run still in progress in separate PowerShell window)
+- Do NOT kill that process — it will resume where it left off
+- weakness_type='personal' = you miss this; others at your Elo find it (HIGH priority drill)
+- weakness_type='bracket' = everyone at your Elo misses this (lower priority, normal for level)
+
+### Subtype Detection Results (2026-05-13)
+Layer 2 pass on 126,251 moves tagged 3.3.6 or 3.4.2. Results:
+```
+3.3.6.a  Forcing sequence missed (2-3 ply)       178 fires
+3.3.6.b  Quiet setup for forcing sequence (3-5)  18,635 fires
+3.3.6.c  Deep tactical sequence (5-7 ply)       123,952 fires  <- dominant
+3.3.6.d  Defensive calculation                   12,308 fires
+3.4.2.a  Prophylactic quiet move                 10,675 fires
+3.4.2.b  Piece improvement / centralization      11,375 fires
+3.4.2.c  Quiet first move of combination (Type A) 17,434 fires
+3.4.2.d  Pawn break / structure                     88 fires
+3.4.2.e  King safety quiet move                  15,922 fires
+3.4.2.f  Zugzwang / tempo                           183 fires
+```
+Key insight: 3.3.6.c (deep tactical, 5+ ply) dominates — player's main calculation
+failure is pure depth, not pattern blindness. 3.3.6.b + 3.4.2.c together (36K fires)
+confirm quiet-setup-for-tactic is a real distinct pattern. 3.4.2.a prophylaxis and
+3.4.2.e king safety are also significant at 10-16K fires each.
+
+### Current Weakness Profile (2026-05-13, 10,836 games)
+From /players/1/profile API endpoint:
+```
+Tilt:          14.68% of sessions  (+50 Elo if fixed)
+Fatigue:       23.14% of sessions  (+50 Elo if fixed)
+Quiet moves:   11.30/100 moves     (+50 Elo if fixed, 3.4.2)
+Forcing moves:  2.61/100 moves     (+50 Elo if fixed, 3.3.3)
+Fork:           1.33/100 moves     (+46.9 Elo if fixed, 3.1.1)
+Estimated total gain:  +413 Elo
+Estimated study time:  ~117 hours
+```
 
 ### Opening Prep Gap Results (as of 2026-05-11, 56% analyzed)
 
@@ -2602,29 +2653,36 @@ the inputs were not pre-clamped. 100 rows had CPL 500-10565.
 Fix: Pre-clamp both eval inputs to [-1000, +1000] before subtraction.
 Cleanup: `UPDATE moves SET centipawn_loss = 500 WHERE centipawn_loss > 500` — fixed.
 
-### Data Status (as of 2026-05-11)
+### Data Status (as of 2026-05-13)
 ```
 Database:          chess_engine on PostgreSQL 18.3
 Player:            StickDoggin (chess.com, id=1)
 Games:             10,921 imported
-Games analyzed:    6,088 / 10,921 (56% — full run in progress)
-Games pending:     4,833 in analysis_queue
+Games analyzed:    10,836 / 10,921 (COMPLETE)
 Moves in DB:       ~819,075 (10,921 x avg 75 moves)
-Concepts:          176
+Concept tags:      383,000+ (move_concepts) + 210,750 subtype tags
+Concepts:          186 (176 original + 10 subtypes: 3.3.6.a-d, 3.4.2.a-f)
+Study mappings:    93 rows (83 original + 10 new subtype rows)
 Thresholds:        58 default rows
 Drill positions:   5,441,692 (Lichess puzzles, all concept codes)
 Sessions:          2,718 detected (avg 4.0 games, max 58)
+Maia-2 moves:      189,000+ processed (full run in progress)
 Machine:           12 logical cores -> 11 parallel workers
+GPU:               None (CPU-only, no CUDA)
+API:               FastAPI running on http://localhost:8000
 ```
 
 ### Post-Full-Run Checklist (run IN ORDER after analysis completes)
 ```
 1. python recalc_chesscom_accuracy.py        # fix circular bug in May 2026 run
 2. python pattern_detector.py               # apply 3.3.6 demotion to all games
-3. python session_detector.py --clear       # regroup sessions with final data
-4. python opening_prep_gap.py 1 --save      # save recency-weighted gaps
-5. python weakness_aggregator.py 1 all      # generate final weakness profile
+3. python pattern_detector.py --subtypes    # add 3.3.6.a-d + 3.4.2.a-f subtypes
+4. python session_detector.py --clear       # regroup sessions with final data
+5. python opening_prep_gap.py 1 --save      # save recency-weighted gaps
+6. python weakness_aggregator.py 1 all      # generate final weakness profile
+7. python update_mastery.py 1               # run mastery update from drills
 ```
+STATUS (2026-05-13): Steps 2, 3, 5, 6 COMPLETE. Steps 1, 4, 7 pending Maia + full analysis.
 
 ---
 
@@ -2657,6 +2715,7 @@ Machine:           12 logical cores -> 11 parallel workers
 - [x] Concept tagger — per-game, populates move_concepts table
 - [x] Session detector — groups within 2h, detects tilt + fatigue
 - [x] Opening preparation gap detector — recency-weighted, 90d half-life
+- [x] **Layer 2 subtype detection: 3.3.6.a-d + 3.4.2.a-f (210,750 tags)**
 - [ ] Positional feature extractor (Silman's seven imbalances)
 - [ ] Opponent capitalization second pass
 
@@ -2679,15 +2738,22 @@ Machine:           12 logical cores -> 11 parallel workers
 ### Phase 6: Study Modules (Basic)
 - [x] Drill position seeding — 5,441,692 Lichess puzzles across all concept codes
 - [x] SM-2 spaced repetition scheduler — drill_session.py
-- [x] Concept study mapping — seed_curriculum.py (83 rows)
+- [x] Concept study mapping — seed_curriculum.py (93 rows including subtypes)
 - [x] Prescription engine — weakness_aggregator.py generate_prescription()
+- [x] **Mastery tracking loop — update_mastery.py (drill → mastery_score → prescription)**
 - [ ] Opening deviation drill (using novelty_move data)
 - [ ] Player's own game positions seeded to drill_positions (from pattern_detector)
 
-### Phase 7: Frontend/API  <- NEXT PRIORITY
-- [ ] REST API layer (FastAPI recommended)
+### Phase 7: Frontend/API  <- CURRENT PRIORITY
+- [x] **FastAPI layer: api/ directory with /health, /players, /weaknesses, /drills, /games**
+- [x] CORS configured for localhost React dev (ports 3000 and 5173)
+- [x] Pydantic v2 schemas for all endpoints
+- [x] /players/{id}/profile — full weakness summary with mastery + Elo estimates
+- [x] /players/{id}/prescription — ranked study prescriptions with personal vs bracket breakdown
+- [x] /players/{id}/drill-session + POST drill-attempt with SM-2 update
+- [x] /players/{id}/games + /games/{id}/moves with full Maia + pattern data
 - [ ] Authentication system
-- [ ] Basic web dashboard (React + Recharts)
+- [ ] **NEXT: React frontend — weakness dashboard + Chessground drill board**
 - [ ] Chess board integration (Chessground from Lichess — open source)
 - [ ] Drill interface (show position → player makes move → feedback)
 
@@ -2803,6 +2869,37 @@ calculation. A grandmaster doesn't calculate a fork — they SEE it.
   **replace** calculation. This is the entire theoretical basis of tactical
   training at sub-GM levels.
 
+### 13. Prescriptions Must Be Specific Enough to Prescribe a Drill
+
+"Study quiet moves" is NOT a prescription. "Study calculation depth" is NOT a prescription.
+These are categories. A player cannot open a training app and practice them.
+
+A prescription must name:
+1. A specific drill type (tactical_drill, positional_drill, endgame_drill, psychological)
+2. A specific drill subtype ('prophylaxis', 'piece_improvement', 'short_forcing_sequence', etc.)
+3. Clear instructions a player can act on immediately
+
+Examples of BAD prescriptions:
+- "Work on quiet moves" → too vague
+- "Study tactics" → player doesn't know what kind
+- "Improve calculation" → no concrete drill possible
+
+Examples of GOOD prescriptions:
+- "Practice prophylactic thinking: before each move, ask what your opponent threatens.
+  If their threat is serious, stop and neutralize it first." (3.4.2.a)
+- "Train 2-3 move forcing combinations: find the capture/check sequence.
+  Your pattern: see the opportunity but miss the tactical sequence." (3.3.6.a)
+- "Piece improvement drills: find moves that dramatically increase piece mobility
+  (2+ new squares controlled). No tactical trigger — pure positioning." (3.4.2.b)
+
+Implementation: every concept code MUST have a concept_study_mapping row before
+it can appear in a prescription. The study_subtype is the specific drill instruction.
+The FastAPI /prescription endpoint returns both study_module and study_subtype.
+
+This is Design Principle #13 because we learned it from the 3.4.2/3.3.6 subtype
+split: 10 distinct subtypes each prescribe fundamentally different training, and
+prescribing "quiet moves" when the real problem is "prophylaxis" misdirects study.
+
 ### 12. Recency Weighting Is Not Optional — It Is Correctness
 
 All weakness detection, gap scoring, and time-ratio calculations MUST apply
@@ -2864,37 +2961,19 @@ If you deviate from theory on move 8 because you forgot the line → preparation
 If you deviate from theory on move 8 because the opponent played an unusual move → different.
 The novelty_move data helps here but we need more nuanced detection.
 
-### 3.4.2 Quiet Move Recognition — Subtype Split (Roadmap)
+### 3.4.2 Quiet Move Recognition — Subtypes IMPLEMENTED (2026-05-13)
 
-3.4.2 fires at 10.78/100 weighted moves and is the #1 weakness by frequency.
-However it conflates two fundamentally different failure types:
+3.4.2 fires at 11.30/100 weighted moves and is the #1 weakness by frequency.
+**DONE:** Layer 2 subtype detection added in pattern_detector.py. Six subtypes:
+- 3.4.2.a  Prophylactic (10,675 fires) — preventive quiet moves
+- 3.4.2.b  Piece improvement / centralization (11,375 fires) — repositioning
+- 3.4.2.c  Quiet setup → combination (17,434 fires) — Type A, demotes 3.4.2 to secondary
+- 3.4.2.d  Pawn break / structure (88 fires) — file-opening pawn moves
+- 3.4.2.e  King safety quiet move (15,922 fires) — king tuck, luft creation
+- 3.4.2.f  Zugzwang / tempo (183 fires) — endgame only, low tension
 
-**Type A — Quiet first move of a tactical combination (44% of fires)**
-- The best move is quiet but sets up a forced tactical sequence
-- Player missed it because they didn't see the downstream tactic
-- Prescription: train the underlying tactic (fork, pin, deflection, etc.)
-- These resolve as the tactical pattern library improves
-- Example: Rd1! (quiet rook move) that sets up a back-rank mate threat
-
-**Type B — Genuinely quiet positional move (56% of fires)**
-- The best move is quiet AND there is no downstream tactical pattern
-- Player missed it due to lack of positional vision or candidate generation
-- Prescription: positional calculation training, prophylaxis drills,
-  candidate move generation exercises
-- These are harder to resolve — represent the true 1600→1800 skill boundary
-- Example: h3! (prophylactic pawn move) that prevents a future attack
-
-**Implementation plan for Layer 2 of pattern_detector.py:**
-When a specific tactical motif fires alongside 3.4.2 on the same move,
-demote 3.4.2 to secondary — the tactical motif IS the primary cause.
-This mirrors the existing 3.3.6 demotion in `_SPECIFIC_TACTICAL`.
-Add 3.4.2 to the same demotion logic: when `_SPECIFIC_TACTICAL` motifs
-are present, cap 3.4.2's weight at 0.40 as well.
-This will re-classify ~44% of 3.4.2 primary fires as secondary, producing
-a cleaner signal for the genuinely quiet positional failures.
-
-Note: This change should only be applied AFTER the full analysis run
-completes, then re-run pattern_detector.py on all games.
+3.4.2.c (17K fires) confirms the ~44% Type A estimate was roughly right (17K/126K ≈ 14%).
+The 3.4.2 → 3.4.2.c demotion is live: when 3.4.2.c fires, 3.4.2 weight is capped at 0.40.
 
 ### Open Technical Questions
 

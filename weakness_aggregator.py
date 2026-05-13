@@ -429,7 +429,7 @@ def generate_prescription(player_id, top_n=10):
                wg.study_efficiency, wg.primary_study_module,
                wg.avg_attribution_weight, wg.trend_30_days,
                wg.first_detected, wg.last_occurred, wg.status,
-               wg.game_type
+               wg.game_type, wg.mastery_score
         FROM weakness_graph wg
         JOIN concepts c ON c.code = wg.concept_code
         WHERE wg.player_id = %s AND wg.status IN ('active', 'improving')
@@ -451,7 +451,7 @@ def generate_prescription(player_id, top_n=10):
     for row in all_active:
         (code, name, occ_count, occ_rate, avg_cpl, elo_impact,
          efficiency, study_mod, avg_attr, trend_30,
-         first_detected, last_occurred, status, game_type) = row
+         first_detected, last_occurred, status, game_type, mastery_score) = row
 
         # Fetch 3 most recent example game/move IDs
         cur.execute("""
@@ -493,6 +493,7 @@ def generate_prescription(player_id, top_n=10):
             'trend_label':          trend_lbl,
             'status':               status,
             'game_type':            game_type,
+            'mastery_score':        round(mastery_score or 0.0, 3),
             'example_game_ids':     ex_games,
             'example_move_ids':     ex_moves,
         }
@@ -574,16 +575,18 @@ def print_weakness_report(player_id):
     print(f'  Estimated gain if all addressed: +{total_impact:.0f} Elo')
     print(f'  Estimated study time:            {total_hours:.0f} hours')
     print()
-    print(f'  {"#":<3} {"Concept":<38} {"Rate":>5} {"CPL":>5} {"Elo":>4}  {"Eff":>6}  {"Module"}')
-    print(f'  {"---":<3} {"-"*38} {"-----":>5} {"-----":>5} {"----":>4}  {"------":>6}  {"-"*18}')
+    print(f'  {"#":<3} {"Concept":<36} {"Rate":>5} {"CPL":>5} {"Elo":>4}  {"Eff":>6}  {"Mastery":>8}  {"Module"}')
+    print(f'  {"---":<3} {"-"*36} {"-----":>5} {"-----":>5} {"----":>4}  {"------":>6}  {"-------":>8}  {"-"*18}')
 
     for i, r in enumerate(primary_recs, 1):
         trend_sym = 'v' if r['trend_label'] == 'improving' else ('^' if r['trend_label'] == 'worsening' else '=')
+        mastery_pct = int((r.get('mastery_score') or 0) * 100)
         print(
-            f'  {i:<3} {r["concept_name"][:38]:<38} '
+            f'  {i:<3} {r["concept_name"][:36]:<36} '
             f'{r["occurrence_rate"]:>5.2f} {r["avg_cpl"]:>5.0f} '
             f'{r["estimated_elo_impact"]:>4.0f}  '
             f'{r["study_efficiency"]:>6.2f}  '
+            f'{mastery_pct:>7}%  '
             f'{r["primary_study_module"] or "?":<18}  {trend_sym}'
         )
 
@@ -606,7 +609,9 @@ def print_weakness_report(player_id):
         print(f'  How often:       {r["occurrence_rate"]:.2f} {rate_label}  ({r["occurrence_count"]:,} total)')
         print(f'  Average CPL:     {r["avg_cpl"]:.0f}cp {"extra during" if is_session else "when this fires"}')
         print(f'  Elo impact est:  +{r["estimated_elo_impact"]:.1f} Elo if fixed')
+        mastery_pct = int((r.get('mastery_score') or 0) * 100)
         print(f'  Study priority:  {r["study_efficiency"]:.2f} Elo/hour  ->  {r["primary_study_module"]}')
+        print(f'  Mastery:         {mastery_pct}%  (0%=never drilled, 80%=mostly resolved, 100%=mastered)')
         if not is_session:
             print(f'  Trend (30d):     {r["trend_label"]}  (d {r["trend_30_days"]:+.3f} mistakes/100 moves)')
             print(f'  Signal quality:  avg attribution weight = {r["avg_attribution"]:.3f}')

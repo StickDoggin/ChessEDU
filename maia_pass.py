@@ -69,11 +69,16 @@ def _weakness_type(cpl, maia_prob) -> str | None:
     return 'bracket'
 
 
-def _fetch_batch(cur, player_id: int | None, limit_games: int | None,
-                 offset: int) -> list:
+def _fetch_batch(cur, player_id: int | None, limit_games: int | None) -> list:
     """
     Fetch a batch of unprocessed player moves.
     Returns list of dicts with move and game fields.
+
+    No OFFSET is used: after each batch is committed the processed rows
+    have maia_probability IS NOT NULL and vanish from the WHERE clause,
+    so the next LIMIT query naturally returns the next fresh batch.
+    Using OFFSET here would skip rows equal to the batch size on every
+    iteration because the filtered set shrinks after each commit.
     """
     pid_filter   = "AND g.player_id = %s" if player_id else ""
     pid_arg      = (player_id,) if player_id else ()
@@ -119,8 +124,8 @@ def _fetch_batch(cur, player_id: int | None, limit_games: int | None,
           {pid_filter}
           {game_limit_clause}
         ORDER BY m.game_id, m.id
-        LIMIT %s OFFSET %s
-    """, pid_arg + game_limit_args + (BATCH_SIZE, offset))
+        LIMIT %s
+    """, pid_arg + game_limit_args + (BATCH_SIZE,))
 
     cols = ('move_id', 'game_id', 'move_uci', 'fen_before',
             'centipawn_loss', 'game_type', 'player_elo', 'opponent_elo')
@@ -241,10 +246,9 @@ def run(player_id: int | None = None, limit_games: int | None = None):
     games_done  = set()
     games_batch = []   # game_ids whose moves we just finished
     t_start     = time.time()
-    offset      = 0
 
     while True:
-        batch = _fetch_batch(cur, player_id, limit_games, offset)
+        batch = _fetch_batch(cur, player_id, limit_games)
         if not batch:
             break
 
@@ -296,11 +300,9 @@ def run(player_id: int | None = None, limit_games: int | None = None):
         if limit_games and len(games_done) >= limit_games:
             break
 
-        # If batch was smaller than BATCH_SIZE, we've exhausted the cursor
+        # If batch was smaller than BATCH_SIZE, all unprocessed moves are done
         if len(batch) < BATCH_SIZE:
             break
-
-        offset += BATCH_SIZE
 
     # Final game win prob update for any stragglers
     remaining_gids = list(games_done)

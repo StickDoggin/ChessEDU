@@ -7,8 +7,8 @@ const PAGE_SIZE = 20
 
 function resultBadge(result) {
   if (!result) return <span className="badge badge-gray">?</span>
-  if (result === '1-0') return <span className="badge badge-green">Win</span>
-  if (result === '0-1') return <span className="badge badge-red">Loss</span>
+  if (result === 'win')  return <span className="badge badge-green">Win</span>
+  if (result === 'loss') return <span className="badge badge-red">Loss</span>
   return <span className="badge badge-gray">Draw</span>
 }
 

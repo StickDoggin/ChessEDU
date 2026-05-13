@@ -2664,7 +2664,7 @@ Concept tags:      383,000+ (move_concepts) + 210,750 subtype tags
 Concepts:          186 (176 original + 10 subtypes: 3.3.6.a-d, 3.4.2.a-f)
 Study mappings:    93 rows (83 original + 10 new subtype rows)
 Thresholds:        58 default rows
-Drill positions:   5,441,692 (Lichess puzzles, all concept codes)
+Drill positions:   5,467,697 (5,441,692 Lichess + 26,005 own-game from maia_probability < 0.15 + CPL >= 100)
 Sessions:          2,718 detected (avg 4.0 games, max 58)
 Maia-2 moves:      189,000+ processed (full run in progress)
 Machine:           12 logical cores -> 11 parallel workers
@@ -2742,7 +2742,8 @@ STATUS (2026-05-13): Steps 2, 3, 5, 6 COMPLETE. Steps 1, 4, 7 pending Maia + ful
 - [x] Prescription engine — weakness_aggregator.py generate_prescription()
 - [x] **Mastery tracking loop — update_mastery.py (drill → mastery_score → prescription)**
 - [ ] Opening deviation drill (using novelty_move data)
-- [ ] Player's own game positions seeded to drill_positions (from pattern_detector)
+- [x] **Player's own game positions seeded to drill_positions — 26,005 positions (maia_probability < 0.15 + CPL >= 100 + weakness_type='personal')**
+- Future: seed positions from famous GM games where Maia indicates the move is hard at 1650 Elo — gives player exposure to positions they'd encounter if they study master games. Source: TWIC database or Lichess master game database.
 
 ### Phase 7: Frontend/API  <- CURRENT PRIORITY
 - [x] **FastAPI layer: api/ directory with /health, /players, /weaknesses, /drills, /games**

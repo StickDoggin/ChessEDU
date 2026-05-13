@@ -10,6 +10,8 @@ router = APIRouter(prefix="/players", tags=["drills"])
 Db = Annotated[psycopg.Connection, Depends(get_db)]
 
 
+DEPTH_ADVANCE_STREAK = 5   # consecutive correct at ceiling before advancing
+
 class DrillPosition(BaseModel):
     drill_id: int
     concept_code: str
@@ -21,6 +23,8 @@ class DrillPosition(BaseModel):
     next_review: str
     review_count: int
     source_game_id: int | None
+    solution_depth: int | None = None
+    visualization_mode: bool = False
 
 
 class DrillSession(BaseModel):
@@ -35,6 +39,7 @@ class DrillAttemptRequest(BaseModel):
     was_correct: bool
     time_spent_ms: int
     move_played: str | None = None
+    solution_depth: int | None = None   # for 3.3.6.c depth tracking
 
 
 class DrillAttemptResponse(BaseModel):
@@ -44,6 +49,7 @@ class DrillAttemptResponse(BaseModel):
     new_interval_days: int
     new_ease_factor: float
     mastery_score_delta: float
+    depth_ceiling_advanced: bool = False
 
 
 @router.get("/{player_id}/drill-session", response_model=DrillSession)
@@ -56,24 +62,43 @@ def get_drill_session(
 
     codes = [c.strip() for c in concept_codes.split(',')] if concept_codes else []
 
-    if codes:
+    # Determine puzzle_rating range for 3.3.6.c progressive mode
+    # puzzle_rating is the depth proxy: ceiling=3 → rating 2000-2800
+    depth_clause = ""
+    depth_args: tuple = ()
+    if codes and '3.3.6.c' in codes:
         cur.execute("""
+            SELECT depth_ceiling FROM player_calculation_profile
+            WHERE player_id = %s AND game_type = 'rapid'
+        """, (player_id,))
+        pr = cur.fetchone()
+        ceiling = int(pr[0]) if pr else 3
+        rating_lo = 800 + ceiling * 400
+        rating_hi = rating_lo + 3 * 400   # 3 depth levels wide
+        depth_clause = "AND (dp.puzzle_rating BETWEEN %s AND %s OR dp.puzzle_rating IS NULL OR dp.concept_code <> '3.3.6.c')"
+        depth_args = (rating_lo, rating_hi)
+
+    if codes:
+        cur.execute(f"""
             SELECT dp.id, dp.concept_code, c.name, dp.fen,
                    dp.correct_move, dp.correct_move_san, dp.difficulty,
-                   dp.next_review, dp.review_count, dp.source_move_id
+                   dp.next_review, dp.review_count, dp.source_move_id,
+                   dp.solution_depth, dp.puzzle_rating
             FROM drill_positions dp
             JOIN concepts c ON c.code = dp.concept_code
             WHERE dp.player_id = %s
               AND dp.concept_code = ANY(%s)
               AND dp.next_review <= %s
+              {depth_clause}
             ORDER BY dp.next_review ASC, dp.difficulty DESC
             LIMIT %s
-        """, (player_id, codes, date.today(), length_mins * 3))
+        """, (player_id, codes, date.today()) + depth_args + (length_mins * 3,))
     else:
         cur.execute("""
             SELECT dp.id, dp.concept_code, c.name, dp.fen,
                    dp.correct_move, dp.correct_move_san, dp.difficulty,
-                   dp.next_review, dp.review_count, dp.source_move_id
+                   dp.next_review, dp.review_count, dp.source_move_id,
+                   dp.solution_depth, dp.puzzle_rating
             FROM drill_positions dp
             JOIN concepts c ON c.code = dp.concept_code
             WHERE dp.player_id = %s AND dp.next_review <= %s
@@ -89,7 +114,9 @@ def get_drill_session(
             drill_id=r[0], concept_code=r[1], concept_name=r[2],
             fen=r[3], correct_move=r[4], correct_move_san=r[5],
             difficulty=r[6] or 0.5, next_review=str(r[7]),
-            review_count=r[8] or 0, source_game_id=r[9]
+            review_count=r[8] or 0, source_game_id=r[9],
+            solution_depth=r[10],
+            visualization_mode=(r[1] == '3.3.6.c' and (r[11] or 0) >= 2000)
         ) for r in rows
     ]
 
@@ -160,6 +187,48 @@ def record_drill_attempt(player_id: int, body: DrillAttemptRequest, db: Db):
     old_mastery = float(mrow[0]) if mrow else 0.0
     mastery_delta = 0.10 if body.was_correct else -0.05
 
+    # 3.3.6.c: advance depth_ceiling after DEPTH_ADVANCE_STREAK correct at ceiling
+    depth_ceiling_advanced = False
+    if code == '3.3.6.c' and body.was_correct and body.solution_depth is not None:
+        cur.execute("""
+            SELECT depth_ceiling FROM player_calculation_profile
+            WHERE player_id = %s AND game_type = 'rapid'
+        """, (player_id,))
+        pr = cur.fetchone()
+        if pr:
+            ceiling = int(pr[0])
+            if body.solution_depth >= ceiling:
+                # Count recent correct attempts at or above ceiling
+                cur.execute("""
+                    SELECT COUNT(*) FROM drill_attempts da
+                    JOIN drill_positions dp ON dp.id = da.drill_id
+                    WHERE da.player_id = %s
+                      AND dp.concept_code = '3.3.6.c'
+                      AND da.was_correct = TRUE
+                      AND da.attempted_at >= NOW() - INTERVAL '7 days'
+                """, (player_id,))
+                streak = cur.fetchone()[0] or 0
+                if streak >= DEPTH_ADVANCE_STREAK:
+                    cur.execute("""
+                        UPDATE player_calculation_profile
+                        SET depth_ceiling = depth_ceiling + 1,
+                            sessions_count = sessions_count + 1,
+                            updated_at = NOW()
+                        WHERE player_id = %s AND game_type = 'rapid'
+                    """, (player_id,))
+                    depth_ceiling_advanced = True
+
+    # Update avg/max depth solved in profile
+    if code == '3.3.6.c' and body.was_correct and body.solution_depth is not None:
+        cur.execute("""
+            UPDATE player_calculation_profile
+            SET max_depth_solved = GREATEST(max_depth_solved, %s),
+                avg_depth_solved = (avg_depth_solved * sessions_count + %s)
+                                   / NULLIF(sessions_count + 1, 0),
+                updated_at = NOW()
+            WHERE player_id = %s AND game_type = 'rapid'
+        """, (body.solution_depth, body.solution_depth, player_id))
+
     db.commit()
     cur.close()
 
@@ -170,4 +239,5 @@ def record_drill_attempt(player_id: int, body: DrillAttemptRequest, db: Db):
         new_interval_days=new_interval,
         new_ease_factor=round(new_ease, 2),
         mastery_score_delta=mastery_delta,
+        depth_ceiling_advanced=depth_ceiling_advanced,
     )

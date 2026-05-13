@@ -41,6 +41,16 @@ OWN_GAME_FRACTION = 0.70 # 70% player's own game positions
 LICHESS_FRACTION  = 0.30 # 30% global Lichess puzzles
 DIFF_WINDOW       = 0.20 # ±0.20 around target difficulty
 
+# ── Calculation depth constants (3.3.6.c) ─────────────────────────────────────
+# solution_depth for Lichess puzzles is 1 (single key move stored in correct_move).
+# We use puzzle_rating as the depth proxy: depth_ceiling maps to rating range
+# depth_ceiling=1 → 1000-1400, +2=3 → 1800-2200, +5=6 → 2600+
+DEPTH_PROGRESSIVE_CODE  = '3.3.6.c'
+DEPTH_CEILING_WINDOW    = 2   # serve puzzles from depth_ceiling to depth_ceiling+2
+DEPTH_ADVANCE_STREAK    = 5   # consecutive correct at ceiling before advancing
+DEPTH_RATING_BASE       = 800   # puzzle_rating = DEPTH_RATING_BASE + depth_ceiling * 400
+DEPTH_RATING_WINDOW     = 400   # rating band width per depth level
+
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -64,15 +74,35 @@ def _target_difficulty(cur, player_id: int) -> float:
     return float(r[0]) if r and r[0] else 0.50
 
 
+def _get_depth_ceiling(cur, player_id: int, game_type: str = 'rapid') -> int:
+    """Return the player's current depth_ceiling for 3.3.6.c drills (default 3)."""
+    cur.execute("""
+        SELECT depth_ceiling FROM player_calculation_profile
+        WHERE player_id = %s AND game_type = %s
+    """, (player_id, game_type))
+    row = cur.fetchone()
+    return int(row[0]) if row else 3
+
+
 def _fetch_positions(cur, player_id_filter, concept_codes: list,
                      today: date, diff_lo: float, diff_hi: float,
-                     limit: int, exclude_ids: tuple = ()) -> list:
+                     limit: int, exclude_ids: tuple = (),
+                     depth_range: tuple = None) -> list:
     """
     Fetch due drill_positions for a given player_id filter.
     player_id_filter=None → Lichess pool; otherwise → player's own positions.
+    depth_range: (min_depth, max_depth) — used only for 3.3.6.c depth-progressive mode.
     """
     cols = ('id', 'concept_code', 'fen', 'correct_move', 'correct_move_san',
-            'difficulty', 'source_move_id', 'lichess_puzzle_id', 'puzzle_rating')
+            'difficulty', 'source_move_id', 'lichess_puzzle_id', 'puzzle_rating',
+            'solution_depth')
+
+    depth_clause = ""
+    depth_args: tuple = ()
+    if depth_range:
+        # depth_range is (min_rating, max_rating) — puzzle_rating proxy for depth
+        depth_clause = "AND (puzzle_rating BETWEEN %s AND %s OR puzzle_rating IS NULL)"
+        depth_args = depth_range
 
     if player_id_filter is None:
         # Lichess global pool
@@ -80,30 +110,35 @@ def _fetch_positions(cur, player_id_filter, concept_codes: list,
         exc_arg    = (list(exclude_ids),) if exclude_ids else ()
         cur.execute(f"""
             SELECT id, concept_code, fen, correct_move, correct_move_san,
-                   difficulty, source_move_id, lichess_puzzle_id, puzzle_rating
+                   difficulty, source_move_id, lichess_puzzle_id, puzzle_rating,
+                   solution_depth
             FROM drill_positions
             WHERE player_id IS NULL
               AND concept_code = ANY(%s)
               AND next_review <= %s
               AND difficulty BETWEEN %s AND %s
+              {depth_clause}
               {exc_clause}
             ORDER BY next_review ASC, RANDOM()
             LIMIT %s
-        """, (concept_codes, today, diff_lo, diff_hi) + exc_arg + (limit,))
+        """, (concept_codes, today, diff_lo, diff_hi) + depth_args + exc_arg + (limit,))
     else:
         # Player's own game-sourced positions
-        cur.execute("""
+        cur.execute(f"""
             SELECT id, concept_code, fen, correct_move, correct_move_san,
-                   difficulty, source_move_id, lichess_puzzle_id, puzzle_rating
+                   difficulty, source_move_id, lichess_puzzle_id, puzzle_rating,
+                   solution_depth
             FROM drill_positions
             WHERE player_id = %s
               AND concept_code = ANY(%s)
               AND next_review <= %s
               AND difficulty BETWEEN %s AND %s
               AND source_move_id IS NOT NULL
+              {depth_clause}
             ORDER BY next_review ASC, RANDOM()
             LIMIT %s
-        """, (player_id_filter, concept_codes, today, diff_lo, diff_hi, limit))
+        """, (player_id_filter, concept_codes, today, diff_lo, diff_hi)
+             + depth_args + (limit,))
 
     rows = cur.fetchall()
     result = []
@@ -139,17 +174,22 @@ def top_weakness_codes(player_id: int, limit: int = 10) -> list:
 def build_session(player_id: int,
                   concept_codes: list,
                   session_length_mins: int = 20,
-                  target_difficulty: Optional[float] = None) -> list:
+                  target_difficulty: Optional[float] = None,
+                  game_type: str = 'rapid') -> list:
     """
     Build an ordered list of drill positions for a session.
 
     Returns list of position dicts, each containing:
       id, concept_code, fen, correct_move, correct_move_san,
       difficulty, source_type ('own_game' | 'lichess'),
-      source_move_id, lichess_puzzle_id, puzzle_rating
+      source_move_id, lichess_puzzle_id, puzzle_rating,
+      solution_depth, visualization_mode
 
     Mix: 70% player own-game positions, 30% Lichess puzzles.
     Shortfall in own-game positions is filled from Lichess.
+
+    For 3.3.6.c (deep tactical), puzzles are served from depth_ceiling to
+    depth_ceiling + DEPTH_CEILING_WINDOW using progressive depth training.
     """
     conn = get_connection()
     cur  = conn.cursor()
@@ -164,10 +204,20 @@ def build_session(player_id: int,
     diff_lo  = max(0.0, target_difficulty - DIFF_WINDOW)
     diff_hi  = min(1.0, target_difficulty + DIFF_WINDOW)
 
+    # For 3.3.6.c, compute rating range from depth_ceiling (puzzle_rating as depth proxy)
+    depth_range = None
+    if DEPTH_PROGRESSIVE_CODE in concept_codes:
+        ceiling      = _get_depth_ceiling(cur, player_id, game_type)
+        rating_lo    = DEPTH_RATING_BASE + ceiling * DEPTH_RATING_WINDOW
+        rating_hi    = rating_lo + (DEPTH_CEILING_WINDOW + 1) * DEPTH_RATING_WINDOW
+        depth_range  = (rating_lo, rating_hi)   # (min_rating, max_rating)
+
     own_rows  = _fetch_positions(cur, player_id, concept_codes,
-                                 today, diff_lo, diff_hi, own_n)
+                                 today, diff_lo, diff_hi, own_n,
+                                 depth_range=depth_range)
     lich_rows = _fetch_positions(cur, None, concept_codes,
-                                 today, diff_lo, diff_hi, lich_n)
+                                 today, diff_lo, diff_hi, lich_n,
+                                 depth_range=depth_range)
 
     # If own positions are scarce, fill up from Lichess
     shortfall = own_n - len(own_rows)
@@ -175,7 +225,8 @@ def build_session(player_id: int,
         seen_ids = tuple(r['id'] for r in lich_rows) if lich_rows else (0,)
         extras   = _fetch_positions(cur, None, concept_codes,
                                     today, diff_lo, diff_hi,
-                                    shortfall, exclude_ids=seen_ids)
+                                    shortfall, exclude_ids=seen_ids,
+                                    depth_range=depth_range)
         lich_rows.extend(extras)
 
     # Interleave: alternate own and Lichess for variety
@@ -186,6 +237,13 @@ def build_session(player_id: int,
             positions.append(own_rows[oi]); oi += 1
         if li < len(lich_rows):
             positions.append(lich_rows[li]); li += 1
+
+    # Tag 3.3.6.c positions with visualization_mode hint (hard puzzles benefit from no-board mode)
+    for p in positions:
+        rating = p.get('puzzle_rating') or 0
+        p['visualization_mode'] = (
+            p['concept_code'] == DEPTH_PROGRESSIVE_CODE and rating >= 2000
+        )
 
     cur.close(); conn.close()
     return positions

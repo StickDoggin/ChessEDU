@@ -22,7 +22,7 @@ class DrillPosition(BaseModel):
     difficulty: float
     next_review: str
     review_count: int
-    source_game_id: int | None
+    source_move_id: int | None
     solution_depth: int | None = None
     visualization_mode: bool = False
 
@@ -149,7 +149,7 @@ def get_drill_session(
             drill_id=r[0], concept_code=r[1], concept_name=r[2],
             fen=r[3], correct_move=r[4], correct_move_san=r[5],
             difficulty=r[6] or 0.5, next_review=str(r[7]),
-            review_count=r[8] or 0, source_game_id=r[9],
+            review_count=r[8] or 0, source_move_id=r[9],
             solution_depth=r[10],
             visualization_mode=(r[1] == '3.3.6.c' and (r[11] or 0) >= 2000)
         ) for r in rows
@@ -276,3 +276,108 @@ def record_drill_attempt(player_id: int, body: DrillAttemptRequest, db: Db):
         mastery_score_delta=mastery_delta,
         depth_ceiling_advanced=depth_ceiling_advanced,
     )
+
+
+@router.get("/{player_id}/drill/{drill_id}/explain")
+def explain_drill(player_id: int, drill_id: int, db: Db):
+    """Return a cached AI explanation for a drill position, generating if needed."""
+    import json
+
+    cur = db.cursor()
+
+    # Create cache table on first use
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drill_explanations (
+            drill_id      INTEGER PRIMARY KEY REFERENCES drill_positions(id),
+            idea          TEXT,
+            problem       TEXT,
+            solution      TEXT,
+            pay_attention JSONB,
+            generated_at  TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    db.commit()
+
+    # Return cached explanation if available
+    cur.execute(
+        "SELECT idea, problem, solution, pay_attention FROM drill_explanations WHERE drill_id = %s",
+        (drill_id,)
+    )
+    cached = cur.fetchone()
+    if cached:
+        cur.close()
+        return {
+            'idea': cached[0], 'problem': cached[1],
+            'solution': cached[2], 'pay_attention': cached[3] or [],
+        }
+
+    # Fetch position + concept name
+    cur.execute("""
+        SELECT dp.fen, dp.correct_move, dp.correct_move_san, c.name
+        FROM drill_positions dp
+        JOIN concepts c ON c.code = dp.concept_code
+        WHERE dp.id = %s
+    """, (drill_id,))
+    pos = cur.fetchone()
+    if not pos:
+        cur.close()
+        raise HTTPException(status_code=404, detail="Drill not found")
+
+    fen, correct_move, correct_move_san, concept_name = pos
+    best_move = correct_move_san or correct_move
+
+    # Call Claude API
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=400,
+            system=(
+                "You are a chess coach. Give specific position explanations naming actual "
+                "pieces and squares. 2 sentences max per section. Return only JSON."
+            ),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"FEN: {fen}\nBest move: {best_move}\nConcept: {concept_name}\n\n"
+                    "Return JSON:\n"
+                    '{"idea": "...", "problem": "...", "solution": "...", '
+                    '"pay_attention": ["...", "...", "..."]}'
+                ),
+            }],
+        )
+
+        text = message.content[0].text.strip()
+        # Strip markdown fences if present
+        if '```' in text:
+            parts = text.split('```')
+            text = parts[1] if len(parts) > 1 else text
+            if text.startswith('json'):
+                text = text[4:].strip()
+
+        data = json.loads(text)
+        idea          = data.get('idea', '')
+        problem       = data.get('problem', '')
+        solution      = data.get('solution', '')
+        pay_attention = data.get('pay_attention', [])
+
+        cur.execute("""
+            INSERT INTO drill_explanations (drill_id, idea, problem, solution, pay_attention)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (drill_id) DO NOTHING
+        """, (drill_id, idea, problem, solution, json.dumps(pay_attention)))
+        db.commit()
+        cur.close()
+
+        return {
+            'idea': idea, 'problem': problem,
+            'solution': solution, 'pay_attention': pay_attention,
+        }
+
+    except ImportError:
+        cur.close()
+        raise HTTPException(status_code=503, detail="Anthropic package not installed. Run: pip install anthropic")
+    except Exception as e:
+        cur.close()
+        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")

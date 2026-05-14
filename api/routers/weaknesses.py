@@ -1,6 +1,6 @@
 """Prescription and opening-gap endpoints."""
 from typing import Annotated
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import psycopg
 from api.dependencies import get_db
@@ -22,6 +22,9 @@ class PrescriptionItem(BaseModel):
     concept_name: str
     occurrence_count: int
     occurrence_rate: float
+    pct_games_affected: float
+    avg_pawns_lost: float | None
+    total_games: int
     estimated_elo_impact: float
     study_efficiency: float
     study_module: str | None
@@ -47,7 +50,14 @@ class OpeningGap(BaseModel):
 def get_prescription(player_id: int, db: Db):
     cur = db.cursor()
 
-    # 1) ELO for bracket lookup
+    # Total analyzed games for pct_games_affected
+    cur.execute(
+        "SELECT COUNT(*) FROM games WHERE player_id = %s AND analyzed = TRUE",
+        (player_id,)
+    )
+    total_games = int(cur.fetchone()[0] or 0)
+
+    # ELO for bracket lookup
     cur.execute(
         "SELECT game_type, current_elo FROM player_ratings WHERE player_id = %s",
         (player_id,)
@@ -56,19 +66,20 @@ def get_prescription(player_id: int, db: Db):
     player_elo = (elo_rows.get('blitz') or elo_rows.get('rapid')
                   or next(iter(elo_rows.values()), 1500))
 
-    # 2) Weakness graph rows
+    # Weakness graph rows — include avg_cpl_when_occurs
     cur.execute("""
         SELECT wg.concept_code, c.name,
                wg.occurrence_rate, wg.estimated_elo_impact,
                wg.study_efficiency, wg.primary_study_module,
                COALESCE(wg.mastery_score, 0), wg.status,
                COALESCE(wg.trend_30_days, 0),
-               COALESCE(wg.occurrence_count, 0)
+               COALESCE(wg.occurrence_count, 0),
+               wg.avg_cpl_when_occurs
         FROM weakness_graph wg
         JOIN concepts c ON c.code = wg.concept_code
         WHERE wg.player_id = %s AND wg.status IN ('active', 'improving')
         ORDER BY COALESCE(wg.study_efficiency, 0) DESC
-        LIMIT 10
+        LIMIT 15
     """, (player_id,))
     wg_rows = cur.fetchall()
     if not wg_rows:
@@ -77,7 +88,7 @@ def get_prescription(player_id: int, db: Db):
 
     codes = [r[0] for r in wg_rows]
 
-    # 3) Study subtypes — single query
+    # Study subtypes — single query
     cur.execute("""
         SELECT concept_code, study_subtype
         FROM concept_study_mapping
@@ -90,8 +101,7 @@ def get_prescription(player_id: int, db: Db):
         if code not in subtypes_map:
             subtypes_map[code] = subtype
 
-    # 4) Examples + breakdown — single batched query (replaces 20 individual queries)
-    #    Drive from concept_ids to force index use on move_concepts(concept_id).
+    # Examples + breakdown — single batched query
     cur.execute("""
         WITH concept_ids AS (
             SELECT id, code FROM concepts WHERE code = ANY(%s)
@@ -139,7 +149,7 @@ def get_prescription(player_id: int, db: Db):
     result = []
     for rank, row in enumerate(wg_rows, 1):
         (code, name, occ_rate, elo_impact, efficiency,
-         study_mod, mastery, status, trend_30, occ_count) = row
+         study_mod, mastery, status, trend_30, occ_count, avg_cpl) = row
 
         b = batch.get(code, {})
         personal_count = b.get('personal', 0)
@@ -155,10 +165,17 @@ def get_prescription(player_id: int, db: Db):
         trend_lbl = ('improving' if (trend_30 or 0) > 0.10
                      else 'worsening' if (trend_30 or 0) < -0.10 else 'stable')
 
+        pct_games = min(round(occ_count / total_games * 100, 1), 100.0) if total_games else 0.0
+        avg_pawns = round(avg_cpl / 100, 1) if avg_cpl is not None else None
+
         result.append(PrescriptionItem(
             rank=rank, concept_code=code, concept_name=name,
             occurrence_count=occ_count,
-            occurrence_rate=occ_rate or 0, estimated_elo_impact=elo_impact or 0,
+            occurrence_rate=occ_rate or 0,
+            pct_games_affected=pct_games,
+            avg_pawns_lost=avg_pawns,
+            total_games=total_games,
+            estimated_elo_impact=elo_impact or 0,
             study_efficiency=efficiency or 0, study_module=study_mod,
             study_subtype=subtypes_map.get(code),
             example_game_ids=b.get('game_ids', []),
@@ -197,7 +214,7 @@ def get_opening_gaps(player_id: int, db: Db):
         return []
 
 
-# ── New detail / summary endpoints ─────────────────────────────────────────
+# ── Detail / summary / resolve endpoints ────────────────────────────────────
 
 class WeaknessDetail(BaseModel):
     concept_code: str
@@ -205,13 +222,12 @@ class WeaknessDetail(BaseModel):
     status: str
     mastery_score: float
     trend_label: str
-    total_appearances: int
-    miss_count: int
-    find_count: int
-    miss_rate: float
-    find_rate: float
-    loss_rate_when_missed: float | None
-    avg_cpl_when_missed: float | None
+    estimated_elo_impact: float | None
+    total_game_appearances: int
+    total_games: int
+    pct_games_affected: float
+    loss_rate: float | None
+    avg_pawns_lost: float | None
     personal_context: str | None
     monthly_trend: list[dict]
     instruction: str | None
@@ -224,13 +240,15 @@ class WeaknessDetail(BaseModel):
 def get_weakness_detail(player_id: int, code: str, db: Db):
     cur = db.cursor()
 
-    # Core weakness_graph row
+    # Core weakness_graph row (includes avg_cpl_when_occurs)
     cur.execute("""
         SELECT c.name,
                COALESCE(wg.status, 'active'),
                COALESCE(wg.mastery_score, 0),
                COALESCE(wg.trend_30_days, 0),
-               COALESCE(wg.occurrence_count, 0)
+               COALESCE(wg.occurrence_count, 0),
+               wg.estimated_elo_impact,
+               wg.avg_cpl_when_occurs
         FROM concepts c
         LEFT JOIN weakness_graph wg
                ON wg.concept_code = c.code AND wg.player_id = %s
@@ -238,47 +256,54 @@ def get_weakness_detail(player_id: int, code: str, db: Db):
     """, (player_id, code))
     row = cur.fetchone()
     if not row:
-        from fastapi import HTTPException
         cur.close()
         raise HTTPException(status_code=404, detail="Concept not found")
 
-    name, status, mastery, trend_30, occ_count = row
+    name, status, mastery, trend_30, occ_count, elo_impact, avg_cpl = row
     trend_lbl = ('improving' if (trend_30 or 0) > 0.10
                  else 'worsening' if (trend_30 or 0) < -0.10 else 'stable')
+    avg_pawns = round(avg_cpl / 100, 1) if avg_cpl is not None else None
 
-    # Miss/find counts and loss rate when missed
+    # Total analyzed games
+    cur.execute(
+        "SELECT COUNT(*) FROM games WHERE player_id = %s AND analyzed = TRUE",
+        (player_id,)
+    )
+    total_games = int(cur.fetchone()[0] or 0)
+
+    # Unique games where this concept appeared + loss rate
     cur.execute("""
-        WITH missed_moves AS (
-            SELECT m.id AS move_id, m.game_id,
-                   CASE WHEN g.result = 'loss' THEN 1 ELSE 0 END AS was_loss
-            FROM moves m
-            JOIN move_concepts mc ON mc.move_id = m.id
-            JOIN concepts      c  ON c.id       = mc.concept_id AND c.code = %s
-            JOIN games         g  ON g.id       = m.game_id
-            WHERE g.player_id = %s AND m.centipawn_loss >= 50
-        ),
-        found_moves AS (
-            SELECT m.id
-            FROM moves m
-            JOIN move_concepts mc ON mc.move_id = m.id
-            JOIN concepts      c  ON c.id       = mc.concept_id AND c.code = %s
-            JOIN games         g  ON g.id       = m.game_id
-            WHERE g.player_id = %s AND (m.centipawn_loss IS NULL OR m.centipawn_loss < 50)
-        )
-        SELECT
-            (SELECT COUNT(*) FROM missed_moves)                          AS miss_count,
-            (SELECT COUNT(*) FROM found_moves)                           AS find_count,
-            (SELECT AVG(was_loss::float) FROM missed_moves)              AS loss_rate,
-            (SELECT AVG(m2.centipawn_loss) FROM missed_moves mm2
-             JOIN moves m2 ON m2.id = mm2.move_id)                       AS avg_cpl
-    """, (code, player_id, code, player_id))
-    stats = cur.fetchone()
-    miss_count, find_count, loss_rate, avg_cpl = stats if stats else (0, 0, None, None)
-    miss_count = miss_count or 0
-    find_count = find_count or 0
-    total = miss_count + find_count
-    miss_rate = miss_count / total if total else 0.0
-    find_rate = find_count / total if total else 0.0
+        SELECT COUNT(DISTINCT g.id)                                          AS game_appearances,
+               AVG(CASE WHEN g.result = 'loss' THEN 1.0 ELSE 0.0 END)      AS loss_rate
+        FROM move_concepts mc
+        JOIN concepts      c ON c.id = mc.concept_id AND c.code = %s
+        JOIN moves         m ON m.id = mc.move_id
+        JOIN games         g ON g.id = m.game_id
+        WHERE g.player_id = %s
+    """, (code, player_id))
+    apps_row = cur.fetchone()
+    total_game_appearances = int(apps_row[0] or 0) if apps_row else 0
+    loss_rate = float(apps_row[1]) if (apps_row and apps_row[1] is not None) else None
+
+    pct_games = min(round(total_game_appearances / total_games * 100, 1), 100.0) if total_games else 0.0
+
+    # Monthly trend — count of games per month where concept appeared
+    cur.execute("""
+        SELECT DATE_TRUNC('month', g.played_at)::date AS month,
+               COUNT(DISTINCT g.id)                    AS count
+        FROM move_concepts mc
+        JOIN concepts      c ON c.id = mc.concept_id AND c.code = %s
+        JOIN moves         m ON m.id = mc.move_id
+        JOIN games         g ON g.id = m.game_id
+        WHERE g.player_id = %s AND g.played_at IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1 DESC
+        LIMIT 12
+    """, (code, player_id))
+    monthly_trend = [
+        {'month': str(r[0])[:7], 'count': int(r[1])}
+        for r in cur.fetchall()
+    ]
 
     # Instructions
     cur.execute("""
@@ -288,43 +313,52 @@ def get_weakness_detail(player_id: int, code: str, db: Db):
     inst_row = cur.fetchone()
     instruction, why_it_works, example = inst_row if inst_row else (None, None, None)
 
-    # Recent examples (up to 3)
+    # Recent examples with game result
     cur.execute("""
-        SELECT g.played_at, g.opening_name, m.centipawn_loss
-        FROM moves m
+        SELECT g.played_at, g.opening_name, m.centipawn_loss, g.result
+        FROM moves         m
         JOIN move_concepts mc ON mc.move_id = m.id
-        JOIN concepts      c  ON c.id       = mc.concept_id AND c.code = %s
-        JOIN games         g  ON g.id       = m.game_id
-        WHERE g.player_id = %s AND m.centipawn_loss >= 50
+        JOIN concepts      c  ON c.id = mc.concept_id AND c.code = %s
+        JOIN games         g  ON g.id = m.game_id
+        WHERE g.player_id = %s AND m.centipawn_loss IS NOT NULL
         ORDER BY g.played_at DESC NULLS LAST
         LIMIT 3
     """, (code, player_id))
     recent = [
-        {'played_at': str(r[0]) if r[0] else None, 'opening_name': r[1], 'centipawn_loss': r[2]}
+        {
+            'played_at': str(r[0]) if r[0] else None,
+            'opening_name': r[1],
+            'centipawn_loss': r[2],
+            'result': r[3],
+        }
         for r in cur.fetchall()
     ]
 
     cur.close()
 
-    total_appearances = occ_count or total
+    # Build warm personal context string
     personal_ctx = None
-    if miss_count > 0:
+    if total_game_appearances > 0:
+        loss_pct = round((loss_rate or 0) * 100)
+        elo_str  = f"+{round(elo_impact or 0)}" if elo_impact else "an unknown amount of"
         personal_ctx = (
-            f"You've encountered this pattern {total_appearances} times. "
-            f"You miss it {round(miss_rate * 100)}% of the time, "
-            f"and when you miss it you lose the game {round((loss_rate or 0) * 100)}% of the time."
+            f"This pattern appeared in {total_game_appearances} of your games — "
+            f"about {pct_games:.1f}% of all your analyzed games. "
+            f"When it came up, you lost {loss_pct}% of those games. "
+            f"Improving here is estimated to be worth about {elo_str} Elo."
         )
 
     return WeaknessDetail(
         concept_code=code, concept_name=name,
         status=status, mastery_score=mastery, trend_label=trend_lbl,
-        total_appearances=total_appearances,
-        miss_count=miss_count, find_count=find_count,
-        miss_rate=round(miss_rate, 4), find_rate=round(find_rate, 4),
-        loss_rate_when_missed=round(loss_rate, 4) if loss_rate is not None else None,
-        avg_cpl_when_missed=round(avg_cpl, 1) if avg_cpl is not None else None,
+        estimated_elo_impact=round(elo_impact, 1) if elo_impact is not None else None,
+        total_game_appearances=total_game_appearances,
+        total_games=total_games,
+        pct_games_affected=pct_games,
+        loss_rate=round(loss_rate, 4) if loss_rate is not None else None,
+        avg_pawns_lost=avg_pawns,
         personal_context=personal_ctx,
-        monthly_trend=[],
+        monthly_trend=monthly_trend,
         instruction=instruction, why_it_works=why_it_works, example=example,
         recent_examples=recent,
     )
@@ -337,6 +371,7 @@ def resolve_weakness(player_id: int, code: str, db: Db):
         UPDATE weakness_graph SET status = 'resolved'
         WHERE player_id = %s AND concept_code = %s
     """, (player_id, code))
+    db.commit()
     cur.close()
     return {"ok": True}
 
@@ -387,10 +422,10 @@ def get_avg_move_time(player_id: int, db: Db):
     cur = db.cursor()
     cur.execute("""
         SELECT
-            AVG(time_spent_ms) FILTER (WHERE move_number <= 15)   AS opening_ms,
-            AVG(time_spent_ms) FILTER (WHERE move_number BETWEEN 16 AND 40) AS mid_ms,
-            AVG(time_spent_ms) FILTER (WHERE move_number > 40)    AS end_ms,
-            AVG(time_spent_ms)                                     AS overall_ms
+            AVG(time_spent_ms) FILTER (WHERE move_number <= 15)                    AS opening_ms,
+            AVG(time_spent_ms) FILTER (WHERE move_number BETWEEN 16 AND 40)        AS mid_ms,
+            AVG(time_spent_ms) FILTER (WHERE move_number > 40)                     AS end_ms,
+            AVG(time_spent_ms)                                                      AS overall_ms
         FROM moves m
         JOIN games g ON g.id = m.game_id
         WHERE g.player_id = %s AND m.time_spent_ms IS NOT NULL AND m.time_spent_ms > 0

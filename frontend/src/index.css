@@ -154,10 +154,14 @@ cg-wrap { display: block; }
 cg-board { background-color: #f0d9b5; }
 cg-board square.light { background-color: #f0d9b5; }
 cg-board square.dark  { background-color: #b58863; }
-.cg-wrap  { width: 500px; height: 500px; }
+.cg-wrap {
+  width:  min(560px, calc(100vw - 440px));
+  height: min(560px, calc(100vw - 440px));
+}
 
 /* ── Drill interface ──────────────────────────────────────── */
-.drill-panel { flex: 1; min-width: 260px; max-width: 380px; }
+.board-wrap { min-height: calc(100vh - 140px); }
+.drill-panel { flex: 1; min-width: 300px; max-width: 380px; }
 .drill-concept { font-size: 12px; color: var(--text-2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
 .drill-prompt  { font-size: 18px; font-weight: 700; margin-bottom: 16px; color: var(--text-0); }
 .drill-feedback { padding: 12px; border-radius: var(--radius); margin: 12px 0; font-weight: 600; }
@@ -251,10 +255,68 @@ cg-board square.dark  { background-color: #b58863; }
 }
 .stat-pill strong { color: var(--text-0); }
 
+/* ── Dashboard ────────────────────────────────────────────── */
+.dash-header { display:flex; justify-content:space-between; align-items:center; padding:16px 0; margin-bottom:16px; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:12px; }
+.dash-identity { display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+.dash-username { font-size:20px; font-weight:700; color:var(--text-0); }
+.dash-rating { font-size:14px; color:var(--accent); font-weight:600; }
+.dash-games { font-size:12px; color:var(--text-2); }
+
+.elo-summary { background:var(--bg-1); border:1px solid var(--border); border-radius:var(--radius); padding:16px 20px; margin-bottom:24px; }
+.elo-summary-label { font-size:12px; color:var(--text-2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
+.elo-summary-value { font-size:28px; font-weight:800; color:var(--green); margin-bottom:12px; }
+.elo-progress-bar { height:8px; background:var(--bg-3); border-radius:4px; overflow:hidden; }
+.elo-progress-fill { height:100%; background:var(--green); border-radius:4px; transition:width 0.5s ease; }
+.elo-progress-labels { display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); margin-top:4px; }
+
+.priority-list { display:flex; flex-direction:column; gap:8px; margin-bottom:24px; }
+.priority-row { background:var(--bg-1); border:1px solid var(--border); border-radius:8px; padding:14px 16px; }
+.priority-row:hover { background:var(--bg-2); }
+.priority-top { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.priority-rank { font-size:12px; color:var(--text-2); min-width:22px; font-weight:600; }
+.priority-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.priority-name { font-size:15px; font-weight:600; color:var(--text-0); flex:1; }
+.priority-elo { font-size:18px; font-weight:800; color:var(--green); }
+.priority-stats { font-size:12px; color:var(--text-2); margin-bottom:8px; padding-left:32px; }
+.priority-bottom { display:flex; align-items:center; gap:12px; padding-left:32px; flex-wrap:wrap; }
+.priority-mastery-wrap { flex:1; min-width:120px; }
+.priority-mastery-label { font-size:11px; color:var(--text-2); margin-bottom:3px; }
+.priority-mastery-bar { height:4px; background:var(--bg-3); border-radius:2px; overflow:hidden; }
+.priority-mastery-fill { height:100%; border-radius:2px; }
+.priority-actions { display:flex; gap:6px; flex-shrink:0; }
+
+.opening-section { margin-top:24px; padding-top:16px; border-top:1px solid var(--border); }
+.opening-section-label { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-2); margin-bottom:12px; }
+.opening-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; color:var(--text-1); }
+.eco-badge { background:var(--bg-2); border:1px solid var(--border); border-radius:4px; padding:2px 6px; font-size:11px; font-family:monospace; color:var(--text-0); flex-shrink:0; }
+.opening-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.opening-loss { color:var(--red); font-weight:600; font-size:12px; flex-shrink:0; }
+.opening-days { color:var(--text-2); font-size:11px; flex-shrink:0; }
+
+.dash-footnote { margin-top:32px; padding-top:16px; border-top:1px solid var(--border); font-size:12px; color:var(--text-2); }
+
+/* ── Coach bubble ─────────────────────────────────────────── */
+.coach-bubble { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; padding:14px 16px; font-size:13px; line-height:1.7; color:var(--text-1); margin-bottom:14px; }
+.coach-label { font-size:10px; font-weight:600; color:var(--text-2); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.4px; }
+
+/* ── Stat grid 2x2 ────────────────────────────────────────── */
+.stat-grid-2x2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:20px; }
+.stat-cell { background:var(--bg-2); border:1px solid var(--border); border-radius:8px; padding:14px; }
+.stat-cell-label { font-size:11px; color:var(--text-2); text-transform:uppercase; letter-spacing:0.4px; margin-bottom:6px; }
+.stat-cell-value { font-size:22px; font-weight:800; color:var(--text-0); }
+.stat-cell-sub { font-size:12px; color:var(--text-2); margin-top:2px; }
+
+/* ── Session complete ─────────────────────────────────────── */
+.session-complete { text-align:center; padding:60px 20px; }
+.session-complete h2 { font-size:28px; font-weight:800; margin:16px 0 8px; color:var(--text-0); }
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 700px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
-  .cg-wrap { width: 320px; height: 320px; }
-  .board-wrap { flex-direction: column; }
+  .cg-wrap { width: min(380px, calc(100vw - 32px)); height: min(380px, calc(100vw - 32px)); }
+  .board-wrap { flex-direction: column; min-height: unset; }
   .weakness-grid { grid-template-columns: 1fr; }
+  .stat-grid-2x2 { grid-template-columns: 1fr; }
+  .priority-bottom { padding-left: 0; }
+  .priority-stats  { padding-left: 0; }
 }

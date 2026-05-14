@@ -57,7 +57,7 @@ html, body { background: var(--bg-0); color: var(--text-0); font-family: 'Inter'
 .nav-link.active { background: var(--accent-dim); color: var(--text-0); }
 
 /* ── Page layout ──────────────────────────────────────────── */
-.page-content { max-width: 1200px; margin: 0 auto; padding: 24px 20px; }
+.page-content { max-width: 700px; margin: 0 auto; padding: 24px 20px; }
 
 /* ── Cards ────────────────────────────────────────────────── */
 .card {
@@ -310,8 +310,117 @@ cg-board square.dark  { background-color: #b58863; }
 .session-complete { text-align:center; padding:60px 20px; }
 .session-complete h2 { font-size:28px; font-weight:800; margin:16px 0 8px; color:var(--text-0); }
 
+/* ── Dashboard summary ────────────────────────────────────── */
+.weakness-summary { display:flex; align-items:baseline; gap:10px; background:var(--bg-1); border:1px solid var(--border); border-radius:var(--radius); padding:14px 18px; margin-bottom:20px; }
+.weakness-summary-count { font-size:32px; font-weight:800; color:var(--accent); }
+.weakness-summary-label { font-size:13px; color:var(--text-2); }
+.priority-pct { font-size:16px; font-weight:800; color:var(--accent); }
+
+/* ── Bottom nav (mobile) ──────────────────────────────────── */
+.bottom-nav { display:none; }
+
+/* ── Home page ────────────────────────────────────────────── */
+.coach-message-box {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 16px 4px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+.coach-avatar-wrap { flex-shrink: 0; }
+.coach-avatar {
+  width: 44px; height: 44px;
+  background: var(--accent-dim);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+}
+.coach-name { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-2); margin-bottom: 6px; }
+.coach-message-text { font-size: 14px; line-height: 1.6; color: var(--text-1); }
+
+.quick-stats-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:24px; }
+.quick-stat { background:var(--bg-1); border:1px solid var(--border); border-radius:var(--radius); padding:14px; text-align:center; }
+.quick-stat-value { font-size:22px; font-weight:800; color:var(--text-0); }
+.quick-stat-label { font-size:11px; color:var(--text-2); margin-top:2px; }
+
+/* ── Learn page ───────────────────────────────────────────── */
+.learn-search {
+  width: 100%; padding: 10px 14px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--text-0);
+  font-size: 14px; margin-bottom: 24px;
+  outline: none;
+}
+.learn-search:focus { border-color: var(--accent); }
+.learn-category { margin-bottom: 28px; }
+.learn-category-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-2); margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--border); }
+.learn-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid rgba(58,64,96,0.35); }
+.learn-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.learn-info { flex:1; min-width:0; }
+.learn-name { font-size:14px; font-weight:600; color:var(--text-0); }
+.learn-short { font-size:12px; color:var(--text-2); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.learn-actions { display:flex; gap:6px; flex-shrink:0; }
+
+/* ── Game Review page ─────────────────────────────────────── */
+.eval-bar {
+  width: 16px;
+  height: min(560px, calc(100vw - 440px));
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column-reverse;
+  border: 1px solid var(--border);
+}
+.eval-bar-white { background: #f0d9b5; transition: height 0.3s ease; }
+.eval-bar-black { background: #312e2b; }
+.review-nav { display:flex; gap:6px; margin-bottom:12px; }
+.review-move-list {
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 4px;
+}
+.review-move-list::-webkit-scrollbar { width: 4px; }
+.review-move-list::-webkit-scrollbar-track { background: var(--bg-2); }
+.review-move-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
 /* ── Responsive ───────────────────────────────────────────── */
-@media (max-width: 700px) {
+@media (max-width: 768px) {
+  .page-content { padding: 16px 12px 80px; }
+  .top-nav .nav-link { display: none; }
+  .top-nav { justify-content: center; }
+  .top-nav .nav-brand { margin-right: 0; }
+
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--bg-1);
+    border-top: 1px solid var(--border);
+    z-index: 200;
+    padding: 6px 0 env(safe-area-inset-bottom);
+  }
+  .bottom-nav .nav-link {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 4px;
+    border-radius: 0;
+    font-size: 10px;
+    text-decoration: none;
+    color: var(--text-2);
+  }
+  .bottom-nav .nav-link.active { color: var(--accent); background: transparent; }
+  .bottom-nav-icon { font-size: 18px; }
+  .bottom-nav-label { font-size: 10px; }
+
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .cg-wrap { width: min(380px, calc(100vw - 32px)); height: min(380px, calc(100vw - 32px)); }
   .board-wrap { flex-direction: column; min-height: unset; }
@@ -319,4 +428,10 @@ cg-board square.dark  { background-color: #b58863; }
   .stat-grid-2x2 { grid-template-columns: 1fr; }
   .priority-bottom { padding-left: 0; }
   .priority-stats  { padding-left: 0; }
+  .quick-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .learn-actions { flex-direction: column; }
+  .learn-short { display: none; }
+  .eval-bar { height: min(380px, calc(100vw - 60px)); }
+  .coach-message-box { border-radius: 16px 16px 16px 4px; }
+  .review-move-list { max-height: 200px; }
 }

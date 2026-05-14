@@ -31,11 +31,14 @@ class MoveDetail(BaseModel):
     color: str | None
     san: str | None
     uci: str | None
+    fen_before: str | None
+    fen_after: str | None
     eval_before: int | None
     eval_after: int | None
     centipawn_loss: int | None
     mistake_class: str | None
     best_move_san: str | None
+    best_move_uci: str | None
     maia_probability: float | None
     maia_win_prob: float | None
     weakness_type: str | None
@@ -79,6 +82,29 @@ def get_games(
     ]
 
 
+@router.get("/{player_id}/games/{game_id}", response_model=GameSummary)
+def get_game(player_id: int, game_id: int, db: Db):
+    cur = db.cursor()
+    cur.execute("""
+        SELECT id, played_at, result, result_type, game_type, time_control,
+               player_elo, opponent_elo, opening_eco, opening_name,
+               accuracy_pct, avg_maia_win_prob, analyzed
+        FROM games WHERE id = %s AND player_id = %s
+    """, (game_id, player_id))
+    row = cur.fetchone()
+    cur.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return GameSummary(
+        game_id=row[0], played_at=str(row[1]) if row[1] else None,
+        result=row[2], result_type=row[3], game_type=row[4],
+        time_control=row[5], player_elo=row[6], opponent_elo=row[7],
+        opening_eco=row[8], opening_name=row[9],
+        accuracy_pct=row[10], avg_maia_win_prob=row[11],
+        analyzed=row[12] or False
+    )
+
+
 @router.get("/{player_id}/games/{game_id}/moves", response_model=list[MoveDetail])
 def get_game_moves(player_id: int, game_id: int, db: Db):
     cur = db.cursor()
@@ -95,8 +121,9 @@ def get_game_moves(player_id: int, game_id: int, db: Db):
 
     cur.execute("""
         SELECT m.id, m.move_number, m.color, m.san, m.uci,
+               m.fen_before, m.fen_after,
                m.eval_before, m.eval_after, m.centipawn_loss,
-               m.mistake_class, m.best_move_san,
+               m.mistake_class, m.best_move_san, m.best_move_uci,
                m.maia_probability, m.maia_win_prob, m.weakness_type,
                m.phase, m.time_pressure, m.pattern_tags
         FROM moves m
@@ -109,10 +136,11 @@ def get_game_moves(player_id: int, game_id: int, db: Db):
     return [
         MoveDetail(
             move_id=r[0], move_number=r[1], color=r[2],
-            san=r[3], uci=r[4], eval_before=r[5], eval_after=r[6],
-            centipawn_loss=r[7], mistake_class=r[8], best_move_san=r[9],
-            maia_probability=r[10], maia_win_prob=r[11], weakness_type=r[12],
-            phase=r[13], time_pressure=r[14],
-            pattern_tags=list(r[15]) if r[15] else None
+            san=r[3], uci=r[4], fen_before=r[5], fen_after=r[6],
+            eval_before=r[7], eval_after=r[8], centipawn_loss=r[9],
+            mistake_class=r[10], best_move_san=r[11], best_move_uci=r[12],
+            maia_probability=r[13], maia_win_prob=r[14], weakness_type=r[15],
+            phase=r[16], time_pressure=r[17],
+            pattern_tags=list(r[18]) if r[18] else None
         ) for r in rows
     ]

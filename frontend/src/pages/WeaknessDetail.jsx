@@ -25,7 +25,8 @@ function resultBadge(result) {
 }
 
 export default function WeaknessDetail({ playerId }) {
-  const { code }    = useParams()
+  const { code: rawCode } = useParams()
+  const code = decodeURIComponent(rawCode || '')
   const nav         = useNavigate()
   const [data,      setData]      = useState(null)
   const [loading,   setLoading]   = useState(true)
@@ -89,16 +90,16 @@ export default function WeaknessDetail({ playerId }) {
       {/* 2×2 stat grid */}
       <div className="stat-grid-2x2 detail-section">
         <div className="stat-cell">
-          <div className="stat-cell-label">Est. Elo Impact</div>
-          <div className="stat-cell-value" style={{ color: 'var(--green)' }}>
-            +{Math.round(data.estimated_elo_impact || 0)}
+          <div className="stat-cell-label">How Often</div>
+          <div className="stat-cell-value" style={{ color: 'var(--accent)' }}>
+            {data.pct_games_affected?.toFixed(1)}%
           </div>
-          <div className="stat-cell-sub">estimated rating points</div>
+          <div className="stat-cell-sub">of your games</div>
         </div>
         <div className="stat-cell">
           <div className="stat-cell-label">Games Affected</div>
           <div className="stat-cell-value">{data.total_game_appearances}</div>
-          <div className="stat-cell-sub">{data.pct_games_affected?.toFixed(1)}% of your games</div>
+          <div className="stat-cell-sub">out of {data.total_games} analyzed</div>
         </div>
         <div className="stat-cell">
           <div className="stat-cell-label">Avg Loss</div>

@@ -16,6 +16,31 @@ const ENCOURAGEMENT = [
   "Almost — what's the piece your opponent can't protect?",
 ]
 
+const CONCEPT_HINTS = {
+  '3.1.1':   ['Look for a piece that attacks two enemy pieces simultaneously', 'Knights can fork from unexpected squares — check all knight jumps'],
+  '3.1.3':   ['A skewer attacks a valuable piece, which must move, losing the one behind it', 'Bishops and rooks deliver skewers on open diagonals and files'],
+  '3.1.4':   ['Moving one piece reveals an attack from another behind it', 'Look for pieces lined up on the same diagonal, file, or rank'],
+  '3.1.7':   ['An absolute pin means the pinned piece cannot legally move', 'Pin pieces against the king or queen to win material'],
+  '3.1.8':   ['Find the defender doing two jobs at once — remove one and the other falls', 'Overloaded pieces often guard key squares and valuable pieces simultaneously'],
+  '3.3.3':   ['Check every check, capture, and threat before considering quiet moves', 'Forcing moves force your opponent to respond — look for them first'],
+  '3.3.6.a': ['Map out the exact sequence: what do I play, what do they play, what next?', 'Count forcing moves 2-3 deep — checks, recaptures, threats'],
+  '3.3.6.b': ['Find the quiet move that makes the combination work', 'What move removes a defender or sets up a fork/pin?'],
+  '3.3.6.c': ['Calculate methodically — one branch at a time', 'Use forcing moves to keep the tree narrow: checks and captures first'],
+  '3.3.6.d': ['When under attack, look for stalemate tricks, perpetual check, or resource moves', 'Every position has saving moves — find the most forcing defensive idea'],
+  '3.4.2.a': ['What is your opponent threatening? Play to prevent it now', 'Prophylaxis means seeing and stopping threats before they become real'],
+  '3.4.2.b': ['Which of your pieces is doing the least? Find it a better square', 'A piece on its best square often decides the game'],
+  '3.4.2.c': ['The quiet first move often goes unnoticed by the opponent', 'Look for a move that both improves a piece and threatens something'],
+  '3.4.2.e': ['Can your king be attacked? Fix that first', 'King safety moves often involve castling, fianchettoing, or clearing escape squares'],
+}
+
+function difficultyLabel(pos) {
+  if (pos.puzzle_rating) return `Rating ${pos.puzzle_rating}`
+  const d = pos.difficulty || 0.5
+  if (d >= 0.75) return 'Hard'
+  if (d >= 0.45) return 'Medium'
+  return 'Easy'
+}
+
 function buildDests(fen) {
   const chess = new Chess(fen)
   const dests = new Map()
@@ -31,10 +56,6 @@ function parseTurn(fen) {
   return fen.split(' ')[1] === 'b' ? 'black' : 'white'
 }
 
-function starsFor(difficulty) {
-  const filled = Math.round((difficulty || 0.5) * 5)
-  return '★'.repeat(filled) + '☆'.repeat(5 - filled)
-}
 
 export default function DrillBoard() {
   const boardRef = useRef(null)
@@ -256,9 +277,8 @@ export default function DrillBoard() {
   const resolved  = feedback === 'correct' || feedback === 'show-answer'
 
   const wd = weaknessDetail
-  const coachPct     = wd?.pct_games_affected?.toFixed(1)
-  const coachLoss    = wd?.loss_rate != null ? Math.round(wd.loss_rate * 100) : null
-  const coachElo     = wd?.estimated_elo_impact ? Math.round(wd.estimated_elo_impact) : null
+  const coachPct  = wd?.pct_games_affected?.toFixed(1)
+  const coachLoss = wd?.loss_rate != null ? Math.round(wd.loss_rate * 100) : null
 
   return (
     <div>
@@ -304,18 +324,16 @@ export default function DrillBoard() {
                 <span className={`badge ${isOwnGame ? 'badge-blue' : 'badge-gray'}`}>
                   {isOwnGame ? 'From your game' : 'Lichess puzzle'}
                 </span>
-                <span style={{ color: '#f0c040', letterSpacing: 1 }}>{starsFor(current.difficulty)}</span>
-                {current.puzzle_rating && <span>· {current.puzzle_rating}</span>}
+                <span>{difficultyLabel(current)}</span>
               </div>
 
               {/* Coach bubble */}
-              {(coachPct || coachLoss || coachElo) && (
+              {(coachPct || coachLoss) && (
                 <div className="coach-bubble">
                   <div className="coach-label">♟ Your Coach</div>
                   <p style={{ margin: '0 0 8px' }}>
                     {coachPct && `This pattern appears in ${coachPct}% of your games. `}
-                    {coachLoss != null && `When it arises, you lose ${coachLoss}% of the time. `}
-                    {coachElo && `Improving here is worth an estimated +${coachElo} Elo.`}
+                    {coachLoss != null && `When it arises, you lose ${coachLoss}% of the time.`}
                   </p>
                   <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)' }}>
                     {isOwnGame
@@ -393,22 +411,26 @@ export default function DrillBoard() {
                 <div className="hint-ladder">
                   {hintIdx === -1 && (
                     <button className="hint-btn" onClick={() => setHintIdx(0)}>
-                      Need a hint? <span style={{ color: 'var(--text-2)' }}>−10% XP</span>
+                      Need a hint?
                     </button>
                   )}
                   {hintIdx >= 0 && (
                     <div className="hint-text">
-                      Look for a {current.concept_code?.startsWith('3.1') ? 'tactical' : 'strategic'} opportunity — check forcing moves first.
+                      {CONCEPT_HINTS[current.concept_code]?.[0]
+                        || (current.concept_code?.startsWith('3.1')
+                          ? 'Look for checks, captures, and threats before quiet moves.'
+                          : 'Find the move that improves your position most.')}
                     </div>
                   )}
                   {hintIdx === 0 && (
                     <button className="hint-btn" style={{ marginTop: 6 }} onClick={() => setHintIdx(1)}>
-                      More detail? <span style={{ color: 'var(--text-2)' }}>−30% XP</span>
+                      More detail?
                     </button>
                   )}
                   {hintIdx >= 1 && (
                     <div className="hint-text" style={{ marginTop: 6 }}>
-                      Theme: <strong>{conceptName(current.concept_code)}</strong>
+                      {CONCEPT_HINTS[current.concept_code]?.[1]
+                        || <>Theme: <strong>{conceptName(current.concept_code)}</strong></>}
                     </div>
                   )}
                 </div>

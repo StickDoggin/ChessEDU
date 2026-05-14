@@ -79,34 +79,37 @@ export default function GamesList({ playerId: _pid, gamesData: _gd, onGamesLoad:
                 <th>Date</th>
                 <th>Type</th>
                 <th>Result</th>
-                <th>ELO</th>
-                <th>Opp</th>
+                <th>Elo</th>
                 <th>Opening</th>
                 <th>Accuracy</th>
-                <th>Maia WP</th>
               </tr>
             </thead>
             <tbody>
-              {games.map(g => (
-                <tr key={g.game_id} style={{ cursor: 'pointer' }}>
-                  <td style={{ color: 'var(--text-2)', fontSize: 12 }}>
-                    {g.played_at ? g.played_at.slice(0, 10) : '—'}
-                  </td>
-                  <td><span className="badge badge-gray">{g.game_type || '?'}</span></td>
-                  <td>{resultBadge(g.result)}</td>
-                  <td>{g.player_elo ?? '—'}</td>
-                  <td>{g.opponent_elo ?? '—'}</td>
-                  <td style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
-                    {g.opening_name || g.opening_eco || '—'}
-                  </td>
-                  <td style={{ color: accuracyColor(g.accuracy_pct), fontWeight: 600 }}>
-                    {g.accuracy_pct != null ? `${g.accuracy_pct.toFixed(1)}%` : '—'}
-                  </td>
-                  <td style={{ color: g.avg_maia_win_prob != null ? 'var(--accent)' : 'var(--text-2)' }}>
-                    {g.avg_maia_win_prob != null ? (g.avg_maia_win_prob * 100).toFixed(0) + '%' : '—'}
-                  </td>
-                </tr>
-              ))}
+              {games.map(g => {
+                const acc   = accuracyColor(g.accuracy_pct)
+                const border = `3px solid ${acc}`
+                return (
+                  <tr key={g.game_id}
+                      style={{ cursor: 'pointer', borderLeft: border }}
+                      onClick={() => nav(`/games/${g.game_id}`)}>
+                    <td style={{ color: 'var(--text-2)', fontSize: 12 }}>
+                      {g.played_at ? g.played_at.slice(0, 10) : '—'}
+                    </td>
+                    <td><span className="badge badge-gray">{g.game_type || '?'}</span></td>
+                    <td>{resultBadge(g.result)}</td>
+                    <td style={{ fontSize: 12 }}>
+                      {g.player_elo ?? '—'}
+                      {g.opponent_elo != null && <span style={{ color: 'var(--text-2)' }}> vs {g.opponent_elo}</span>}
+                    </td>
+                    <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+                      {g.opening_name || g.opening_eco || '—'}
+                    </td>
+                    <td style={{ color: acc, fontWeight: 600 }}>
+                      {g.accuracy_pct != null ? `${g.accuracy_pct.toFixed(1)}%` : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}

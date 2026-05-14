@@ -66,7 +66,7 @@ def get_prescription(player_id: int, db: Db):
     player_elo = (elo_rows.get('blitz') or elo_rows.get('rapid')
                   or next(iter(elo_rows.values()), 1500))
 
-    # Weakness graph rows — include avg_cpl_when_occurs
+    # Weakness graph rows — exclude broad parent codes (use subtypes instead)
     cur.execute("""
         SELECT wg.concept_code, c.name,
                wg.occurrence_rate, wg.estimated_elo_impact,
@@ -78,7 +78,8 @@ def get_prescription(player_id: int, db: Db):
         FROM weakness_graph wg
         JOIN concepts c ON c.code = wg.concept_code
         WHERE wg.player_id = %s AND wg.status IN ('active', 'improving')
-        ORDER BY COALESCE(wg.study_efficiency, 0) DESC
+          AND wg.concept_code NOT IN ('3.4.2', '3.3.6')
+        ORDER BY COALESCE(wg.occurrence_count, 0) DESC
         LIMIT 15
     """, (player_id,))
     wg_rows = cur.fetchall()
@@ -340,12 +341,10 @@ def get_weakness_detail(player_id: int, code: str, db: Db):
     personal_ctx = None
     if total_game_appearances > 0:
         loss_pct = round((loss_rate or 0) * 100)
-        elo_str  = f"+{round(elo_impact or 0)}" if elo_impact else "an unknown amount of"
         personal_ctx = (
             f"This pattern appeared in {total_game_appearances} of your games — "
             f"about {pct_games:.1f}% of all your analyzed games. "
-            f"When it came up, you lost {loss_pct}% of those games. "
-            f"Improving here is estimated to be worth about {elo_str} Elo."
+            f"When it came up, you lost {loss_pct}% of those games."
         )
 
     return WeaknessDetail(

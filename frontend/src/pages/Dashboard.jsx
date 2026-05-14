@@ -22,9 +22,8 @@ function PriorityRow({ item, rank, onDive, onDrill }) {
   const color   = conceptColor(item.concept_code)
   const mastery = item.mastery_score || 0
   const mColor  = masteryColor(mastery)
-  const eloNum  = Math.round(item.estimated_elo_impact || 0)
-  const pawns   = item.avg_pawns_lost != null ? `${item.avg_pawns_lost} pawns` : null
-  const pct     = item.pct_games_affected != null ? `${item.pct_games_affected}% of games` : null
+  const pct     = item.pct_games_affected != null ? `${item.pct_games_affected}%` : null
+  const pawns   = item.avg_pawns_lost != null ? `${item.avg_pawns_lost} pawns avg loss` : null
 
   return (
     <div className="priority-row">
@@ -34,14 +33,12 @@ function PriorityRow({ item, rank, onDive, onDrill }) {
         <span className="priority-name">{conceptName(item.concept_code)}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           {trendArrow(item.trend_label)}
-          <span className="priority-elo">+{eloNum} Elo</span>
+          {pct && <span className="priority-pct">{pct} of games</span>}
         </span>
       </div>
 
-      {(pawns || pct) && (
-        <div className="priority-stats">
-          {[pawns, pct].filter(Boolean).join(' · ')}
-        </div>
+      {pawns && (
+        <div className="priority-stats">{pawns}</div>
       )}
 
       <div className="priority-bottom">
@@ -117,26 +114,18 @@ export default function Dashboard({ playerId, profileData, prescriptionData, onP
   const tiltPct    = ((profile.tilt_rate    || 0) * 100).toFixed(1)
   const fatiguePct = ((profile.fatigue_rate || 0) * 100).toFixed(1)
 
-  // Trainable weaknesses only (exclude 7.x.x psychological)
   const allRx     = rx || []
   const trainable = allRx.filter(r => !PSYCH_CODES.has(r.concept_code) && r.status !== 'resolved')
-  const psych     = allRx.filter(r =>  PSYCH_CODES.has(r.concept_code))
 
-  // Sort by estimated_elo_impact DESC for dashboard
+  // Sort by pct_games_affected DESC
   const priorityRx = [...trainable].sort((a, b) =>
-    (b.estimated_elo_impact || 0) - (a.estimated_elo_impact || 0)
+    (b.pct_games_affected || 0) - (a.pct_games_affected || 0)
   )
   const displayed = showAll ? priorityRx : priorityRx.slice(0, 5)
 
-  // Elo summary bar (trainable weaknesses only, capped at +300 for progress display)
-  const totalEloGain   = trainable.reduce((s, r) => s + (r.estimated_elo_impact || 0), 0)
-  const currentElo     = ratingMap['rapid'] || ratingMap['blitz'] || 1500
-  const goalElo        = currentElo + Math.round(totalEloGain)
-  const progressPct    = Math.min((totalEloGain / 300) * 100, 100)
-
   return (
     <div>
-      {/* ── ZONE 1 — HEADER ─────────────────────────────────── */}
+      {/* ── HEADER ─────────────────────────────────── */}
       <div className="dash-header">
         <div className="dash-identity">
           <span className="dash-username">{profile.username}</span>
@@ -146,37 +135,32 @@ export default function Dashboard({ playerId, profileData, prescriptionData, onP
           {ratingMap['blitz'] && (
             <span className="dash-rating">Blitz {ratingMap['blitz']}</span>
           )}
-          <span className="dash-games">{(profile.games_analyzed || 0).toLocaleString()} games</span>
+          <span className="dash-games">{(profile.games_analyzed || 0).toLocaleString()} games analyzed</span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary" style={{ fontSize: 12, padding: '6px 12px' }}
                   onClick={fetchData} title="Refresh data">
             ↺ Refresh
           </button>
-          <button className="btn btn-primary" onClick={() => nav('/drill')}>
+          <button className="btn btn-primary" onClick={() => nav('/study')}>
             Start Today's Session →
           </button>
         </div>
       </div>
 
-      {/* ── ZONE 2 — ELO IMPACT SUMMARY ─────────────────────── */}
-      {totalEloGain > 0 && (
-        <div className="elo-summary">
-          <div className="elo-summary-label">Estimated Elo gain if all weaknesses fixed</div>
-          <div className="elo-summary-value">+{Math.round(totalEloGain)}</div>
-          <div className="elo-progress-bar">
-            <div className="elo-progress-fill" style={{ width: `${progressPct}%` }} />
-          </div>
-          <div className="elo-progress-labels">
-            <span>Current: {currentElo}</span>
-            <span>Goal: {goalElo}</span>
-          </div>
+      {/* ── WEAKNESS SUMMARY ─────────────────────────── */}
+      {trainable.length > 0 && (
+        <div className="weakness-summary">
+          <span className="weakness-summary-count">{trainable.length}</span>
+          <span className="weakness-summary-label">
+            active weakness{trainable.length !== 1 ? 'es' : ''} found in your game history
+          </span>
         </div>
       )}
 
-      {/* ── ZONE 3 — PRIORITY LIST ───────────────────────────── */}
+      {/* ── PRIORITY LIST ───────────────────────────── */}
       <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-2)', marginBottom: 12 }}>
-        Where your Elo is going
+        Where your games are being lost
       </div>
 
       {priorityRx.length === 0 ? (
@@ -190,7 +174,7 @@ export default function Dashboard({ playerId, profileData, prescriptionData, onP
                 item={item}
                 rank={i + 1}
                 onDive={code => nav(`/weakness/${encodeURIComponent(code)}`)}
-                onDrill={() => nav('/drill')}
+                onDrill={() => nav('/study')}
               />
             ))}
           </div>
@@ -207,7 +191,7 @@ export default function Dashboard({ playerId, profileData, prescriptionData, onP
         </>
       )}
 
-      {/* ── ZONE 4 — OPENING GAPS ───────────────────────────── */}
+      {/* ── OPENING GAPS ───────────────────────────── */}
       {gaps.length > 0 && (
         <div className="opening-section">
           <div className="opening-section-label">📖 Prescribed Opening Study</div>
@@ -235,8 +219,8 @@ export default function Dashboard({ playerId, profileData, prescriptionData, onP
         </div>
       )}
 
-      {/* ── FOOTNOTE — PSYCHOLOGICAL OBSERVATIONS ───────────── */}
-      {(parseFloat(tiltPct) > 0 || parseFloat(fatiguePct) > 0 || psych.length > 0) && (
+      {/* ── FOOTNOTE ─────────────────────────── */}
+      {(parseFloat(tiltPct) > 0 || parseFloat(fatiguePct) > 0) && (
         <div className="dash-footnote">
           Note:{' '}
           {parseFloat(tiltPct) > 0 && `Tilt detected in ${tiltPct}% of sessions. `}

@@ -235,6 +235,8 @@ class WeaknessDetail(BaseModel):
     why_it_works: str | None
     example: str | None
     recent_examples: list[dict]
+    recent_losses_14d: int
+    drill_count: int
 
 
 @router.get("/{player_id}/weakness/{code}/detail", response_model=WeaknessDetail)
@@ -335,6 +337,25 @@ def get_weakness_detail(player_id: int, code: str, db: Db):
         for r in cur.fetchall()
     ]
 
+    # Recent losses in last 14 days involving this concept
+    cur.execute("""
+        SELECT COUNT(DISTINCT g.id)
+        FROM move_concepts mc
+        JOIN concepts      c ON c.id = mc.concept_id AND c.code = %s
+        JOIN moves         m ON m.id = mc.move_id
+        JOIN games         g ON g.id = m.game_id
+        WHERE g.player_id = %s AND g.result = 'loss'
+          AND g.played_at >= NOW() - INTERVAL '14 days'
+    """, (code, player_id))
+    recent_losses_14d = int(cur.fetchone()[0] or 0)
+
+    # Available drill positions for this concept
+    cur.execute(
+        "SELECT COUNT(*) FROM drill_positions WHERE concept_code = %s",
+        (code,)
+    )
+    drill_count = int(cur.fetchone()[0] or 0)
+
     cur.close()
 
     # Build warm personal context string
@@ -360,6 +381,8 @@ def get_weakness_detail(player_id: int, code: str, db: Db):
         monthly_trend=monthly_trend,
         instruction=instruction, why_it_works=why_it_works, example=example,
         recent_examples=recent,
+        recent_losses_14d=recent_losses_14d,
+        drill_count=drill_count,
     )
 
 
@@ -439,3 +462,70 @@ def get_avg_move_time(player_id: int, db: Db):
         endgame_ms=round(row[2], 1) if row[2] else None,
         overall_ms=round(row[3], 1) if row[3] else None,
     )
+
+
+class ThisWeek(BaseModel):
+    win_rate: float | None
+    avg_accuracy: float | None
+    positions_drilled: int
+    avg_maia_wp: float | None
+    games_played: int
+
+
+@router.get("/{player_id}/this-week", response_model=ThisWeek)
+def get_this_week(player_id: int, db: Db):
+    cur = db.cursor()
+    cur.execute("""
+        SELECT COUNT(*),
+               AVG(CASE WHEN result = 'win' THEN 100.0 ELSE 0.0 END),
+               AVG(accuracy_pct),
+               AVG(avg_maia_win_prob)
+        FROM games
+        WHERE player_id = %s AND played_at >= NOW() - INTERVAL '7 days'
+    """, (player_id,))
+    row = cur.fetchone()
+    cur.execute("""
+        SELECT COUNT(*) FROM drill_attempts
+        WHERE player_id = %s AND attempted_at >= NOW() - INTERVAL '7 days'
+    """, (player_id,))
+    drills = int(cur.fetchone()[0] or 0)
+    cur.close()
+    games = int(row[0] or 0)
+    return ThisWeek(
+        win_rate=round(float(row[1]), 1) if row[1] else None,
+        avg_accuracy=round(float(row[2]), 1) if row[2] else None,
+        positions_drilled=drills,
+        avg_maia_wp=round(float(row[3]) * 100, 1) if row[3] else None,
+        games_played=games,
+    )
+
+
+class PerformancePoint(BaseModel):
+    week: str
+    win_rate: float | None
+    accuracy: float | None
+    games: int
+
+
+@router.get("/{player_id}/performance-trend", response_model=list[PerformancePoint])
+def get_performance_trend(player_id: int, db: Db):
+    cur = db.cursor()
+    cur.execute("""
+        SELECT DATE_TRUNC('week', played_at)::date,
+               COUNT(*),
+               AVG(CASE WHEN result = 'win' THEN 100.0 ELSE 0.0 END),
+               AVG(accuracy_pct)
+        FROM games
+        WHERE player_id = %s AND played_at >= NOW() - INTERVAL '8 weeks'
+        GROUP BY 1 ORDER BY 1
+    """, (player_id,))
+    rows = cur.fetchall()
+    cur.close()
+    return [
+        PerformancePoint(
+            week=str(r[0]),
+            games=int(r[1] or 0),
+            win_rate=round(float(r[2]), 1) if r[2] else None,
+            accuracy=round(float(r[3]), 1) if r[3] else None,
+        ) for r in rows
+    ]

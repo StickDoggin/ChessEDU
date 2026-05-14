@@ -4,3 +4,11 @@ venv/
 .env
 __pycache__/
 *.pyc
+maia2_models/*.pt
+lichess_db_puzzle.csv.zst
+investigate_accuracy.py
+_bench_drill*.py
+_benchmark*.py
+_check_*.py
+_profile_diagnose.py
+_time_prescription.py

@@ -7,30 +7,27 @@ import GamesList from './pages/GamesList.jsx'
 import GameReview from './pages/GameReview.jsx'
 import Profile from './pages/Profile.jsx'
 import WeaknessDetail from './pages/WeaknessDetail.jsx'
+import Openings from './pages/Openings.jsx'
 
 const TAB_LINKS = [
-  { to: '/',        label: 'Home',    icon: '⌂',  end: true },
-  { to: '/study',   label: 'Study',   icon: '♟' },
-  { to: '/learn',   label: 'Learn',   icon: '📖' },
-  { to: '/games',   label: 'Games',   icon: '🎯' },
-  { to: '/profile', label: 'Profile', icon: '👤' },
+  { to: '/',         label: 'Coach',    icon: '♟',  end: true },
+  { to: '/training', label: 'Training', icon: '🎓' },
+  { to: '/games',    label: 'Games',    icon: '🎮' },
+  { to: '/concepts', label: 'Concepts', icon: '📖' },
+  { to: '/openings', label: 'Openings', icon: '🌐' },
 ]
 
 function Nav() {
-  const cls = ({ isActive }) => isActive ? 'nav-link active' : 'nav-link'
+  const tabCls = ({ isActive }) => `bottom-nav-item${isActive ? ' active' : ''}`
   return (
     <>
       <nav className="top-nav">
         <span className="nav-brand">ChessEDU</span>
-        {TAB_LINKS.map(t => (
-          <NavLink key={t.to} to={t.to} className={cls} end={t.end}>
-            {t.label}
-          </NavLink>
-        ))}
+        <NavLink to="/profile" className="profile-icon-btn">👤</NavLink>
       </nav>
       <nav className="bottom-nav">
         {TAB_LINKS.map(t => (
-          <NavLink key={t.to} to={t.to} className={cls} end={t.end}>
+          <NavLink key={t.to} to={t.to} className={tabCls} end={t.end}>
             <span className="bottom-nav-icon">{t.icon}</span>
             <span className="bottom-nav-label">{t.label}</span>
           </NavLink>
@@ -57,18 +54,22 @@ export default function App() {
               onProfileLoad={setProfileData} onPrescriptionLoad={setPrescriptionData}
             />
           } />
-          <Route path="/study" element={<DrillBoard />} />
-          <Route path="/drill" element={<Navigate to="/study" replace />} />
-          <Route path="/learn" element={<Learn playerId={PLAYER_ID} prescriptionData={prescriptionData} />} />
-          <Route path="/games" element={<GamesList playerId={PLAYER_ID} />} />
+          <Route path="/training" element={<DrillBoard />} />
+          <Route path="/games"    element={<GamesList playerId={PLAYER_ID} />} />
           <Route path="/games/:gameId" element={<GameReview playerId={PLAYER_ID} />} />
-          <Route path="/profile" element={
+          <Route path="/concepts" element={<Learn playerId={PLAYER_ID} prescriptionData={prescriptionData} />} />
+          <Route path="/openings" element={<Openings playerId={PLAYER_ID} />} />
+          <Route path="/profile"  element={
             <Profile playerId={PLAYER_ID}
               profileData={profileData} prescriptionData={prescriptionData}
               onProfileLoad={setProfileData} onPrescriptionLoad={setPrescriptionData}
             />
           } />
           <Route path="/weakness/:code" element={<WeaknessDetail playerId={PLAYER_ID} />} />
+          {/* Legacy redirects */}
+          <Route path="/drill" element={<Navigate to="/training" replace />} />
+          <Route path="/study" element={<Navigate to="/training" replace />} />
+          <Route path="/learn" element={<Navigate to="/concepts" replace />} />
         </Routes>
       </main>
     </BrowserRouter>

@@ -19,7 +19,7 @@ function accuracyColor(pct) {
   return 'var(--red)'
 }
 
-export default function GamesList() {
+export default function GamesList({ playerId: _pid, gamesData: _gd, onGamesLoad: _ogl }) {
   const [games,   setGames]   = useState([])
   const [offset,  setOffset]  = useState(0)
   const [loading, setLoading] = useState(true)

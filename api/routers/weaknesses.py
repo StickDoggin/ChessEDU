@@ -432,6 +432,69 @@ def get_mastery_summary(player_id: int, db: Db):
     )
 
 
+@router.get("/{player_id}/deep-prescription")
+def deep_prescription(player_id: int, db: Db):
+    """
+    Returns top concept-position patterns ranked by priority_score.
+    Richer than /prescription: includes position type, Maia deficit,
+    result impact, trend confidence, and AI-generated coaching insight.
+    """
+    cur = db.cursor()
+    cur.execute("""
+        SELECT
+            cpp.concept_code,
+            c.name                  AS concept_name,
+            cpp.position_type,
+            cpp.occurrence_count,
+            cpp.game_count,
+            cpp.avg_cpl,
+            cpp.maia_deficit,
+            cpp.win_rate_with_miss,
+            cpp.win_rate_baseline,
+            cpp.result_impact,
+            cpp.trend_direction,
+            cpp.trend_confidence,
+            cpp.months_worsening,
+            cpp.priority_score,
+            ci.insight_text
+        FROM concept_position_pattern cpp
+        JOIN concepts c ON c.code = cpp.concept_code
+        LEFT JOIN coaching_insights ci
+            ON ci.player_id = cpp.player_id
+            AND ci.concept_code = cpp.concept_code
+            AND ci.position_type = cpp.position_type
+        WHERE cpp.player_id = %s
+          AND cpp.priority_score > 0.10
+          AND cpp.occurrence_count >= 5
+        ORDER BY cpp.priority_score DESC
+        LIMIT 30
+    """, (player_id,))
+
+    rows = cur.fetchall()
+    cur.close()
+
+    return [
+        {
+            "concept_code":        r[0],
+            "concept_name":        r[1],
+            "position_type":       r[2],
+            "occurrence_count":    r[3],
+            "game_count":          r[4],
+            "avg_cpl":             round(r[5] or 0, 1),
+            "maia_deficit":        round(r[6] or 0, 4),
+            "win_rate_with_miss":  round(r[7] or 0, 3),
+            "win_rate_baseline":   round(r[8] or 0, 3),
+            "result_impact":       round(r[9] or 0, 3),
+            "trend_direction":     r[10],
+            "trend_confidence":    round(r[11] or 0, 3),
+            "months_worsening":    r[12],
+            "priority_score":      round(r[13] or 0, 4),
+            "coaching_insight":    r[14],
+        }
+        for r in rows
+    ]
+
+
 class AvgMoveTime(BaseModel):
     opening_ms: float | None
     middlegame_ms: float | None
